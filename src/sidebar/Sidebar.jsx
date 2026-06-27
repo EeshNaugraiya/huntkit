@@ -215,6 +215,8 @@ function AnalysisPanel({ analysis, analyzing }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <ScoreBar score={matchScore} />
 
+      <PlatformBreakdown jdText={analysis?.jdData?.description} />
+
       {summary && (
         <Section title="Summary">
           <p style={{ fontSize: 13, lineHeight: 1.6, color: '#d4d4d8' }}>{summary}</p>
@@ -476,6 +478,116 @@ function CompareResults({ results, recommended }) {
         )}
       </div>
     </Section>
+  );
+}
+
+// ─── Platform Breakdown ───────────────────────────────────────────────────────
+
+function PlatformBreakdown({ jdText }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [atsFit, setAtsFit] = useState(null);
+  const [error, setError] = useState(null);
+
+  function load() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    chrome.runtime.sendMessage(
+      { type: 'SCORE_ATS_PLATFORMS', payload: { jdText } },
+      (response) => {
+        setLoading(false);
+        if (chrome.runtime.lastError || response?.error) {
+          setError(response?.error || chrome.runtime.lastError?.message || 'Scoring failed');
+          return;
+        }
+        setAtsFit(response);
+      }
+    );
+  }
+
+  function toggle() {
+    const opening = !open;
+    setOpen(opening);
+    if (opening && !atsFit && !loading) load();
+  }
+
+  if (!jdText) return null;
+
+  return (
+    <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 10, overflow: 'hidden' }}>
+      <button
+        onClick={toggle}
+        style={{
+          width: '100%',
+          padding: '11px 14px',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#71717a', textTransform: 'uppercase', letterSpacing: 1 }}>
+          Platform Breakdown
+        </span>
+        <span style={{ color: '#52525b', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {loading && (
+            <p style={{ fontSize: 12, color: '#71717a', textAlign: 'center', margin: '4px 0' }}>Scoring platforms…</p>
+          )}
+          {error && (
+            <p style={{ fontSize: 12, color: '#ef4444', margin: 0 }}>{error}</p>
+          )}
+          {atsFit?.platforms && (
+            <>
+              {atsFit.platforms.map((p, i) => {
+                const pct = Math.round(p.score);
+                const isGreen = pct >= 70;
+                const isRed = pct < 45;
+                const dot = isGreen ? '🟢' : isRed ? '🔴' : '🟡';
+                const color = isGreen ? '#22c55e' : isRed ? '#ef4444' : '#f59e0b';
+                const isBest = i === 0;
+                const isWorst = i === atsFit.platforms.length - 1;
+                return (
+                  <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
+                    <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0 }}>{dot}</span>
+                    <span style={{ flex: 1, color: '#d4d4d8', fontWeight: isBest ? 600 : 400 }}>{p.name}</span>
+                    <span style={{ fontWeight: 700, color, minWidth: 34, textAlign: 'right' }}>{pct}%</span>
+                    {isBest && (
+                      <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 500, flexShrink: 0 }}>
+                        Most likely to pass
+                      </span>
+                    )}
+                    {isWorst && !isBest && (
+                      <span style={{ fontSize: 10, color: '#71717a', flexShrink: 0 }}>
+                        Hardest to pass
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{
+                marginTop: 4,
+                paddingTop: 8,
+                borderTop: '1px solid #27272a',
+                fontSize: 11,
+                color: '#71717a',
+                lineHeight: 1.5,
+              }}>
+                Best: <span style={{ color: '#22c55e', fontWeight: 600 }}>{atsFit.best}</span>
+                {' · '}
+                Hardest: <span style={{ color: '#ef4444', fontWeight: 600 }}>{atsFit.hardest}</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -1,4 +1,5 @@
 import { analyzeJD, rewriteBullets, generateQuestions, generateRoadmap } from '../ai/index.js';
+import { scoreAllPlatforms } from '../ai/ats-profiles.js';
 import { saveJob, findDuplicate } from '../storage/tracker.js';
 import { getAllResumes, addResume, deleteResume, setDefaultResume } from '../storage/resume.js';
 
@@ -57,6 +58,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'GENERATE_ROADMAP') {
     handleGenerateRoadmap(message.payload).then(sendResponse).catch((err) => {
+      sendResponse({ error: err.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'SCORE_ATS_PLATFORMS') {
+    handleScoreATSPlatforms(message.payload).then(sendResponse).catch((err) => {
       sendResponse({ error: err.message });
     });
     return true;
@@ -152,6 +160,12 @@ async function handleGenerateRoadmap(payload) {
     geminiApiKey: settings.geminiApiKey,
     openaiApiKey: settings.openaiApiKey,
   });
+}
+
+async function handleScoreATSPlatforms(payload) {
+  const settings = await getSettings();
+  const resumeText = resolveDefaultResumeText(settings);
+  return scoreAllPlatforms(resumeText, payload.jdText);
 }
 
 async function handleAnalyzeJD(payload) {

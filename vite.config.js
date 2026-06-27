@@ -8,6 +8,8 @@ export default defineConfig({
     webExtension({
       manifest: './manifest.json',
       additionalInputs: [
+        'src/popup/index.html',
+        'src/sidebar/index.html',
         'src/resume/index.html',
         'src/content/linkedin.js',
         'src/content/naukri.js',

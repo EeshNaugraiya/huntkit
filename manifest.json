@@ -7,8 +7,7 @@
     "storage",
     "tabs",
     "activeTab",
-    "scripting",
-    "sidePanel"
+    "scripting"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
@@ -61,7 +60,13 @@
       "run_at": "document_idle"
     }
   ],
-  "side_panel": {
-    "default_path": "src/sidebar/index.html"
-  }
+  "web_accessible_resources": [{
+    "resources": ["src/sidebar/index.html", "src/sidebar/index.js", "client.js", "pdf.worker.min.js"],
+    "matches": [
+      "https://www.linkedin.com/*",
+      "https://www.naukri.com/*",
+      "https://www.indeed.com/*",
+      "https://in.indeed.com/*"
+    ]
+  }]
 }

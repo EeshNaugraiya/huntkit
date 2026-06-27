@@ -1,3 +1,7 @@
+import { parseJSON } from './parse.js';
+
+const JSON_SYSTEM_PROMPT = 'IMPORTANT: Respond with raw JSON only. No markdown code fences, no ```json, no ``` wrapper, no explanation before or after. Just the JSON object.';
+
 export async function analyzeWithQwen(prompt, { apiKey }) {
   const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
     method: 'POST',
@@ -7,7 +11,10 @@ export async function analyzeWithQwen(prompt, { apiKey }) {
     },
     body: JSON.stringify({
       model: 'qwen-max',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: JSON_SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
       max_tokens: 1024,
     }),
   });
@@ -18,5 +25,6 @@ export async function analyzeWithQwen(prompt, { apiKey }) {
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  const text = data.choices[0].message.content;
+  return parseJSON(text);
 }

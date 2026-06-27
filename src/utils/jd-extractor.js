@@ -1,32 +1,49 @@
+const LI_DESC_SELECTORS = [
+  '.jobs-description__content',
+  '.jobs-description-content__text',
+  '.jobs-box__html-content',
+  '#job-details',
+  '[class*="jobs-description"]',
+  '[class*="job-description"]',
+  '[data-test="job-description"]',
+  '.scaffold-layout__detail',
+  '.jobs-unified-top-card__job-insight',
+];
+
+const LI_TITLE_SELECTORS = [
+  '.job-details-jobs-unified-top-card__job-title h1',
+  '.jobs-unified-top-card__job-title h1',
+  'h1[class*="job-title"]',
+  '.t-24.t-bold',
+];
+
+const LI_COMPANY_SELECTORS = [
+  '.job-details-jobs-unified-top-card__company-name',
+  '.jobs-unified-top-card__company-name',
+  '[class*="company-name"] a',
+];
+
+function firstEl(selectors, minTextLen = 0) {
+  for (const sel of selectors) {
+    try {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim().length > minTextLen) return el;
+    } catch {
+      // invalid selector — skip
+    }
+  }
+  return null;
+}
+
 export function extractLinkedInJD() {
-  const titleEl =
-    document.querySelector('.job-details-jobs-unified-top-card__job-title h1') ||
-    document.querySelector('.jobs-unified-top-card__job-title h1') ||
-    document.querySelector('.jobs-unified-top-card__job-title') ||
-    document.querySelector('h1[class*="job-title"]');
-
-  const companyEl =
-    document.querySelector('.job-details-jobs-unified-top-card__company-name') ||
-    document.querySelector('.jobs-unified-top-card__company-name') ||
-    document.querySelector('[class*="company-name"]') ||
-    document.querySelector('.jobs-unified-top-card__subtitle-primary-grouping a');
-
-  // Try selectors from most-specific to broadest; LinkedIn rotates class names frequently
-  const descEl =
-    document.querySelector('#job-details') ||
-    document.querySelector('.jobs-description__content') ||
-    document.querySelector('.jobs-description') ||
-    document.querySelector('.job-details-module') ||
-    document.querySelector('[class*="jobs-description"]') ||
-    document.querySelector('[class*="job-description"]');
-
+  const descEl = firstEl(LI_DESC_SELECTORS, 100);
   if (!descEl) return null;
 
   return {
     source: 'linkedin',
     url: location.href,
-    title: titleEl?.textContent?.trim() || '',
-    company: companyEl?.textContent?.trim() || '',
+    title: firstEl(LI_TITLE_SELECTORS)?.textContent?.trim() || '',
+    company: firstEl(LI_COMPANY_SELECTORS)?.textContent?.trim() || '',
     description: descEl.textContent.trim(),
   };
 }

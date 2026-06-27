@@ -1,10 +1,9 @@
-import { analyzeJD } from '../ai/index.js';
-import { saveJob } from '../storage/tracker.js';
+import { analyzeJD, rewriteBullets, generateQuestions, generateRoadmap } from '../ai/index.js';
+import { saveJob, findDuplicate } from '../storage/tracker.js';
 import { getAllResumes, addResume, deleteResume, setDefaultResume } from '../storage/resume.js';
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') {
-    chrome.sidePanel.setOptions({ enabled: true });
     seedDefaultSettings();
   }
 });
@@ -20,7 +19,7 @@ async function seedDefaultSettings() {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'ANALYZE_JD') {
     handleAnalyzeJD(message.payload).then(sendResponse).catch((err) => {
       sendResponse({ error: err.message });
@@ -36,15 +35,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'SAVE_JOB') {
-    saveJob(message.payload).then(sendResponse).catch((err) => {
+    handleSaveJob(message.payload).then(sendResponse).catch((err) => {
       sendResponse({ error: err.message });
     });
     return true;
   }
 
-  if (message.type === 'OPEN_SIDEBAR') {
-    chrome.sidePanel.open({ windowId: sender.tab.windowId });
-    sendResponse({ ok: true });
+  if (message.type === 'REWRITE_BULLETS') {
+    handleRewriteBullets(message.payload).then(sendResponse).catch((err) => {
+      sendResponse({ error: err.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'GENERATE_QUESTIONS') {
+    handleGenerateQuestions(message.payload).then(sendResponse).catch((err) => {
+      sendResponse({ error: err.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'GENERATE_ROADMAP') {
+    handleGenerateRoadmap(message.payload).then(sendResponse).catch((err) => {
+      sendResponse({ error: err.message });
+    });
     return true;
   }
 
@@ -88,8 +102,63 @@ function resolveDefaultResumeText(settings) {
   return settings.resumeText || '';
 }
 
+async function handleSaveJob(payload) {
+  if (!payload.forceSave) {
+    const dup = await findDuplicate(payload.title, payload.company);
+    if (dup) {
+      return {
+        duplicate: true,
+        existing: { id: dup.id, title: dup.title, company: dup.company, status: dup.status, savedAt: dup.savedAt },
+      };
+    }
+  }
+  return saveJob(payload);
+}
+
+async function handleRewriteBullets(payload) {
+  const settings = await getSettings();
+  return rewriteBullets({
+    bulletsText: payload.bulletsText,
+    jdText: payload.jdText,
+    provider: settings.aiProvider,
+    anthropicApiKey: settings.anthropicApiKey,
+    qwenApiKey: settings.qwenApiKey,
+    geminiApiKey: settings.geminiApiKey,
+    openaiApiKey: settings.openaiApiKey,
+  });
+}
+
+async function handleGenerateQuestions(payload) {
+  const settings = await getSettings();
+  return generateQuestions({
+    jdText: payload.jdText,
+    resumeText: resolveDefaultResumeText(settings),
+    provider: settings.aiProvider,
+    anthropicApiKey: settings.anthropicApiKey,
+    qwenApiKey: settings.qwenApiKey,
+    geminiApiKey: settings.geminiApiKey,
+    openaiApiKey: settings.openaiApiKey,
+  });
+}
+
+async function handleGenerateRoadmap(payload) {
+  const settings = await getSettings();
+  return generateRoadmap({
+    jdText: payload.jdText,
+    resumeText: resolveDefaultResumeText(settings),
+    provider: settings.aiProvider,
+    anthropicApiKey: settings.anthropicApiKey,
+    qwenApiKey: settings.qwenApiKey,
+    geminiApiKey: settings.geminiApiKey,
+    openaiApiKey: settings.openaiApiKey,
+  });
+}
+
 async function handleAnalyzeJD(payload) {
   const settings = await getSettings();
+  console.log('[huntkit] provider:', settings.aiProvider);
+  console.log('[huntkit] anthropic key length:', settings.anthropicApiKey?.length);
+  console.log('[huntkit] anthropic key prefix:', settings.anthropicApiKey?.slice(0, 10));
   const result = await analyzeJD({
     jdText: payload.jdText,
     resumeText: resolveDefaultResumeText(settings),

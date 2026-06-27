@@ -1,8 +1,29 @@
 import { extractNaukriJD } from '../utils/jd-extractor.js';
-import { injectHuntKitButton } from './generic.js';
+import { injectHuntKitButton, injectSidebarTrigger, showNewJobToast } from './generic.js';
+
+let lastUrl = location.href;
+
+injectSidebarTrigger();
+
+function handleNewJobDetected(isInitialLoad) {
+  chrome.storage.local.get(['sidebarWasOpen', 'resumes', 'resumeText'], (data) => {
+    const hasResume = (data.resumes?.length > 0) || !!data.resumeText;
+
+    if (!hasResume) {
+      const s = document.getElementById('huntkit-root'); if (s) s.style.display = 'flex';
+    } else if (data.sidebarWasOpen) {
+      const s = document.getElementById('huntkit-root'); if (s) s.style.display = 'flex';
+    } else if (!isInitialLoad) {
+      showNewJobToast();
+    }
+  });
+}
 
 function init() {
   if (!isJobDetailPage()) return;
+
+  document.getElementById('huntkit-analyze-btn')?.remove();
+  chrome.storage.local.set({ currentJobUrl: location.href });
 
   const jd = extractNaukriJD();
   if (jd) {
@@ -10,20 +31,49 @@ function init() {
       document.querySelector('.apply-button-container') ||
       document.querySelector('.job-header');
     injectHuntKitButton({ container, jdData: jd });
+  } else {
+    // Retry up to 4× for dynamically loaded content
+    let attempts = 0;
+    const retry = setInterval(() => {
+      const jd2 = extractNaukriJD();
+      if (jd2) {
+        clearInterval(retry);
+        const container =
+          document.querySelector('.apply-button-container') ||
+          document.querySelector('.job-header');
+        injectHuntKitButton({ container, jdData: jd2 });
+      } else if (++attempts >= 4) {
+        clearInterval(retry);
+      }
+    }, 1000);
   }
 }
 
 function isJobDetailPage() {
-  return location.pathname.includes('/job-listings-') ||
-         document.querySelector('.jd-header') !== null;
+  return (
+    location.pathname.includes('/job-listings-') ||
+    document.querySelector('.jd-header') !== null
+  );
 }
 
-// Naukri loads content dynamically
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => {
+    handleNewJobDetected(true);
+    init();
+  });
 } else {
+  handleNewJobDetected(true);
   init();
 }
 
-// Handle SPA navigation
 window.addEventListener('popstate', () => setTimeout(init, 500));
+
+// Naukri sometimes pushes new job content without a popstate event
+const observer = new MutationObserver(() => {
+  if (location.href !== lastUrl) {
+    lastUrl = location.href;
+    handleNewJobDetected(false);
+    setTimeout(init, 500);
+  }
+});
+observer.observe(document.body, { childList: true, subtree: true });

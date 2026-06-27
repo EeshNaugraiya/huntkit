@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getJobs, updateJobStatus, deleteJob } from '../storage/tracker.js';
 
 const STATUSES = ['interested', 'applied', 'interview', 'offer', 'rejected'];
@@ -37,16 +37,57 @@ export default function JobTracker() {
     loadJobs();
   }
 
+  function exportCSV() {
+    const headers = ['title', 'company', 'platform', 'status', 'url', 'savedAt', 'appliedAt', 'notes'];
+    const rows = jobs.map((j) =>
+      headers.map((h) => {
+        const v = j[h] ?? '';
+        if (h === 'savedAt' || h === 'appliedAt') return v ? new Date(v).toLocaleDateString() : '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+      })
+    );
+    const csv = [headers, ...rows].map((r) => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `huntkit-jobs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const displayed = filter === 'all' ? jobs : jobs.filter((j) => j.status === filter);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Filter */}
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <FilterChip label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
-        {STATUSES.map((s) => (
-          <FilterChip key={s} label={s} active={filter === s} onClick={() => setFilter(s)} color={STATUS_COLORS[s]} />
-        ))}
+      {/* Filter + Export row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: 1 }}>
+          <FilterChip label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
+          {STATUSES.map((s) => (
+            <FilterChip key={s} label={s} active={filter === s} onClick={() => setFilter(s)} color={STATUS_COLORS[s]} />
+          ))}
+        </div>
+        {jobs.length > 0 && (
+          <button
+            onClick={exportCSV}
+            title="Export as CSV"
+            style={{
+              flexShrink: 0,
+              padding: '4px 10px',
+              background: 'none',
+              border: '1px solid #3f3f46',
+              borderRadius: 6,
+              color: '#a1a1aa',
+              fontSize: 11,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ↓ CSV
+          </button>
+        )}
       </div>
 
       {/* Job cards */}

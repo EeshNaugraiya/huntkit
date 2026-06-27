@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const TABS = ['Settings', 'Resume', 'Tracker'];
+const TABS = ['Resume', 'Settings'];
 
 // Routes storage reads/writes through the background service worker.
 function sendMsg(type, payload = {}) {
@@ -37,6 +37,8 @@ export default function App() {
   }, []);
 
   function saveSettings() {
+    console.log('[settings] saving provider:', settings.aiProvider);
+    console.log('[settings] saving anthropic key length:', settings.anthropicApiKey?.length);
     chrome.storage.local.set(settings, () => {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -76,9 +78,8 @@ export default function App() {
 
       {/* Content */}
       <div style={{ flex: 1, padding: 20, overflowY: 'auto' }}>
-        {tab === 'Settings' && <SettingsPanel settings={settings} onChange={setSettings} />}
         {tab === 'Resume' && <ResumePanel />}
-        {tab === 'Tracker' && <TrackerLink />}
+        {tab === 'Settings' && <SettingsPanel settings={settings} onChange={setSettings} />}
       </div>
 
       {/* Footer — only shown on Settings tab */}
@@ -326,34 +327,6 @@ function ResumeCard({ resume, onDelete, onSetDefault }) {
           Set as Default
         </button>
       )}
-    </div>
-  );
-}
-
-// ─── Tracker ──────────────────────────────────────────────────────────────────
-
-function TrackerLink() {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', paddingTop: 24 }}>
-      <span style={{ fontSize: 40 }}>📋</span>
-      <p style={{ color: '#a1a1aa', fontSize: 13, textAlign: 'center' }}>
-        Open the sidebar to view your tracked jobs and application pipeline.
-      </p>
-      <button
-        onClick={() => chrome.runtime.sendMessage({ type: 'OPEN_SIDEBAR' })}
-        style={{
-          padding: '10px 24px',
-          background: '#6366f1',
-          color: 'white',
-          border: 'none',
-          borderRadius: 8,
-          cursor: 'pointer',
-          fontWeight: 600,
-          fontSize: 14,
-        }}
-      >
-        Open Sidebar
-      </button>
     </div>
   );
 }

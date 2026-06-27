@@ -27,3 +27,17 @@ export async function deleteJob(id) {
 export async function clearJobs() {
   await chrome.storage.local.remove([KEY]);
 }
+
+export async function findDuplicate(title, company) {
+  const jobs = await getJobs();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const t = (title || '').toLowerCase().trim();
+  const c = (company || '').toLowerCase().trim();
+  return jobs.find(
+    (j) =>
+      (j.title || '').toLowerCase().trim() === t &&
+      (j.company || '').toLowerCase().trim() === c &&
+      now - j.savedAt < thirtyDays
+  ) || null;
+}

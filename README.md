@@ -123,3 +123,8 @@ PRs welcome. Open an issue first for major changes.
 
 ## License
 MIT
+
+## Credits
+ATS platform scoring engine adapted from 
+[ats-screener](https://github.com/sunnypatell/ats-screener) 
+by Sunny Patel (MIT License)

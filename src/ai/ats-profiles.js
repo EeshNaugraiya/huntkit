@@ -14,7 +14,25 @@ const STOP_WORDS = new Set([
   'these','they','this','those','through','under','until','up','us','we','what',
   'when','where','which','while','who','whom','why','you','your','etc','ie','eg',
   'per','via',
+  // JD boilerplate — prevents common filler phrases from inflating missing-keyword lists
+  'job','minimum','qualifications','required','preferred','bachelor','equivalent',
+  'practical','strong','good','ability','following','include','including','must',
+  'have','nice','plus','bonus','least','seek','looking','ideal','like','want',
+  'high','degree','experience','languages','year','technology','human','learning',
+  'team','work','role','position','candidate','company','skills','knowledge',
+  'understanding','working','related','relevant','years','using','used','use',
+  'able','well','within','across','provide','ensure','support','manage','develop',
+  'build','create','senior','junior','lead','responsible','opportunity','business',
+  'based','background','proven','demonstrated','excellent','effective',
+  'collaborative','communication','written','verbal','analytical','oriented',
+  'environment','growing','scale','detail','fast','paced',
 ]);
+
+// Filters display keyword lists — removes stop words, pure numbers, and short tokens
+const SKILL_FILTER = (kw) =>
+  kw.length > 3 &&
+  !STOP_WORDS.has(kw.toLowerCase()) &&
+  !/^\d+$/.test(kw);
 
 // ─── Synonym groups (nlp/synonyms.ts) ────────────────────────────────────────
 const SYNONYM_GROUPS = [
@@ -164,7 +182,8 @@ function areSynonyms(t1, t2) {
 // Split on whitespace/comma/semicolon/pipe; strip leading/trailing punctuation
 // (preserve internal hyphens, dots, +, #); filter stop words + min length 2
 function tokenize(text) {
-  const words = (text || '').split(/[\s,;|]+/);
+  text = (text || '').replace(/\.(?=\d)/g, ' ');
+  const words = text.split(/[\s,;|]+/);
   const tokens = [];
   for (let i = 0; i < words.length; i++) {
     const cleaned = words[i].replace(/^[^a-zA-Z0-9#+]+|[^a-zA-Z0-9#+]+$/g, '');
@@ -263,10 +282,30 @@ function _detectSections(text) {
 }
 
 function _extractBullets(text) {
-  return (text || '').split('\n')
-    .map((l) => l.trim())
-    .filter((l) => (/^[-•*·▪►➤○●]\s+/.test(l) || /^\d+\.\s+/.test(l)) && l.length > 20)
-    .map((l) => l.replace(/^[-•*·▪►➤○●]\s+/, '').replace(/^\d+\.\s+/, '').trim());
+  const lines = (text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const bulletSet = new Set();
+
+  // Pass 1: explicit bullet symbols (standard resumes)
+  for (const l of lines) {
+    if ((/^[-•*·▪►➤○●]\s+/.test(l) || /^\d+\.\s+/.test(l)) && l.length > 20) {
+      bulletSet.add(l.replace(/^[-•*·▪►➤○●]\s+/, '').replace(/^\d+\.\s+/, '').trim());
+    }
+  }
+
+  // Pass 2: PDF fallback — plain lines that look like experience bullets without symbols
+  const _sectionPat = /^(experience|education|skills|projects|certif|summary|objective|work|employment|profile|contact|about|overview)/i;
+  for (const l of lines) {
+    if (l.length < 40 || l.length > 200) continue;
+    if (l === l.toUpperCase() && /[A-Z]/.test(l)) continue; // all-caps header
+    if (_sectionPat.test(l) && l.length < 60) continue;
+    if (/^[-•*·▪►➤○●]\s+/.test(l) || /^\d+\.\s+/.test(l)) continue; // already caught
+    const firstWord = l.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
+    if (/^[A-Z]/.test(l) || (firstWord && STRONG_ACTION_VERBS.has(firstWord))) {
+      bulletSet.add(l);
+    }
+  }
+
+  return [...bulletSet];
 }
 
 function _extractEducationText(text) {
@@ -332,25 +371,26 @@ function _parseResume(text) {
 // Starts at 100 and applies deductions scaled by parsingStrictness (0–1).
 function _scoreFormatting(parsed, strictness) {
   let d = 0;
-  if (parsed.hasMultipleColumns) d += 15 * strictness;
-  if (parsed.hasTables)          d += 12 * strictness;
-  if (parsed.pageCount > 2)      d += 5  * strictness;
-  if (parsed.wordCount < 150)    d += 10 * strictness;
-  else if (parsed.wordCount > 1500) d += 3 * strictness;
+  const issues = [];
+  if (parsed.hasMultipleColumns) { d += 15 * strictness; issues.push('Multi-column layout — use single column'); }
+  if (parsed.hasTables)          { d += 12 * strictness; issues.push('Tables detected — convert to bullet lists'); }
+  if (parsed.pageCount > 2)      { d += 5  * strictness; issues.push(`${parsed.pageCount} pages — trim to 1–2`); }
+  if (parsed.wordCount < 150)    { d += 10 * strictness; issues.push('Too short — add more detail'); }
+  else if (parsed.wordCount > 1500) { d += 3 * strictness; issues.push('Too long — consider condensing'); }
 
   const specialRatio = (parsed.resumeText.match(/[^\w\s.,;:!?@#$%&*()\-+=/\\'"]/g) || []).length /
                        Math.max(1, parsed.resumeText.length);
-  if (specialRatio > 0.05) d += 8 * strictness;
+  if (specialRatio > 0.05) { d += 8 * strictness; issues.push('Special symbols may confuse ATS parsers'); }
 
   const lines = parsed.resumeText.split('\n');
   const capLines = lines.filter((l) => l.trim().length > 30 && l.trim() === l.trim().toUpperCase() && /[A-Z]/.test(l)).length;
-  if (capLines > 3) d += 3 * strictness;
+  if (capLines > 3) { d += 3 * strictness; issues.push('All-caps headers may not parse correctly'); }
 
   const bulletLines = lines.filter((l) => /^\s*[-•*·▪►➤○●]\s/.test(l));
   const bulletKinds = new Set(bulletLines.map((l) => l.match(/^\s*([-•*·▪►➤○●])/)?.[1] ?? ''));
-  if (bulletKinds.size > 2) d += 2 * strictness;
+  if (bulletKinds.size > 2) { d += 2 * strictness; issues.push('Mixed bullet styles — standardize to one'); }
 
-  return Math.max(0, Math.min(100, Math.round(100 - d)));
+  return { score: Math.max(0, Math.min(100, Math.round(100 - d))), issues };
 }
 
 // ─── Section scorer (scorer/section-scorer.ts) ───────────────────────────────
@@ -393,16 +433,31 @@ const QUANT_PATTERNS = [
 
 // Returns { score 0-100, quantifiedBullets, totalBullets }
 // quantScore(0-40) + actionScore(0-30) + bulletCountScore(10-30) = max 100
-function _scoreExperience(bullets) {
-  if (!bullets.length) return { score: 0, quantifiedBullets: 0, totalBullets: 0 };
+function _scoreExperience(bullets, resumeText) {
+  let effectiveBullets = bullets;
+
+  // Fallback for PDF-extracted text: scan full text when bullet detection found < 3 items
+  if (bullets.length < 3 && resumeText) {
+    const segments = resumeText
+      .split(/\n|\.\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 20 && s.length < 300);
+    const extra = segments.filter((s) => {
+      const firstWord = s.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
+      return (firstWord && STRONG_ACTION_VERBS.has(firstWord)) || QUANT_PATTERNS.some((p) => p.test(s));
+    });
+    effectiveBullets = [...new Set([...bullets, ...extra])];
+  }
+
+  if (!effectiveBullets.length) return { score: 0, quantifiedBullets: 0, totalBullets: 0 };
   let quantifiedBullets = 0;
   let actionVerbCount = 0;
-  for (const b of bullets) {
+  for (const b of effectiveBullets) {
     if (QUANT_PATTERNS.some((p) => p.test(b))) quantifiedBullets++;
     const first = b.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
     if (first && STRONG_ACTION_VERBS.has(first)) actionVerbCount++;
   }
-  const n = bullets.length;
+  const n = effectiveBullets.length;
   const quantScore = Math.min(1, quantifiedBullets / n / 0.4) * 40;
   const actionScore = Math.min(1, actionVerbCount / n / 0.7) * 30;
   const countScore = n >= 8 ? 30 : n >= 5 ? 25 : n >= 3 ? 20 : 10;
@@ -456,6 +511,11 @@ const PROFILES = [
     weights: { formatting: 0.25, keywordMatch: 0.30, sectionCompleteness: 0.15, experienceRelevance: 0.15, educationMatch: 0.10, quantification: 0.05 },
     requiredSections: ['contact', 'experience', 'education', 'skills'],
     passingScore: 70,
+    tip: 'Workday uses exact + AI matching. Focus on section headers and standard formatting.',
+    prioritizes: {
+      checks: ['Standard section headers (Experience, Education, Skills)', 'Clean single-column formatting', 'Exact keyword matches from JD'],
+      crosses: ['Tables, text boxes, headers/footers', 'Creative or graphic resume layouts'],
+    },
     applyQuirks(parsed, score) {
       // workday-page-limit: may truncate beyond 2 pages (-8)
       return Math.max(0, Math.min(100, score + (parsed.pageCount > 2 ? -8 : 0)));
@@ -469,6 +529,11 @@ const PROFILES = [
     weights: { formatting: 0.20, keywordMatch: 0.35, sectionCompleteness: 0.15, experienceRelevance: 0.15, educationMatch: 0.10, quantification: 0.05 },
     requiredSections: ['contact', 'experience', 'education', 'skills'],
     passingScore: 65,
+    tip: 'Taleo is the strictest — literal keyword matching only. Add exact phrases from the JD.',
+    prioritizes: {
+      checks: ['Literal exact keyword phrases from JD', 'Standard chronological format', 'Spelled out acronyms'],
+      crosses: ['Synonyms or paraphrased keywords', 'Abbreviations (write Python not py)'],
+    },
     applyQuirks(parsed, score) {
       let adj = 0;
       // taleo-keyword-density: <5 skills detected → -10
@@ -487,6 +552,11 @@ const PROFILES = [
     weights: { formatting: 0.15, keywordMatch: 0.30, sectionCompleteness: 0.15, experienceRelevance: 0.20, educationMatch: 0.10, quantification: 0.10 },
     requiredSections: ['contact', 'experience', 'education'],
     passingScore: 60,
+    tip: 'iCIMS uses semantic ML — most forgiving. Context and synonyms count here.',
+    prioritizes: {
+      checks: ['Semantic keyword matching (synonyms count)', 'Strong experience section with metrics', 'Natural language descriptions'],
+      crosses: ['Keyword stuffing (penalized)', 'Overly sparse bullet points'],
+    },
     applyQuirks(parsed, score) {
       // icims-skills-taxonomy: ≥10 skills → bonus +5
       return Math.max(0, Math.min(100, score + (parsed.resumeSkills.length >= 10 ? 5 : 0)));
@@ -500,6 +570,11 @@ const PROFILES = [
     weights: { formatting: 0.10, keywordMatch: 0.25, sectionCompleteness: 0.10, experienceRelevance: 0.25, educationMatch: 0.10, quantification: 0.20 },
     requiredSections: ['experience', 'education'],
     passingScore: 55,
+    tip: "Greenhouse doesn't auto-score. Focus on compelling narrative and quantified impact.",
+    prioritizes: {
+      checks: ['Compelling narrative and storytelling', 'Quantified achievements (%, $, x improvement)', 'Clear career progression'],
+      crosses: ['Keyword stuffing', 'Generic bullet points without impact'],
+    },
     applyQuirks(parsed, score) {
       let adj = 0;
       // greenhouse-quantification: ≥40% quantified bullets → +8
@@ -520,6 +595,11 @@ const PROFILES = [
     weights: { formatting: 0.08, keywordMatch: 0.22, sectionCompleteness: 0.10, experienceRelevance: 0.30, educationMatch: 0.10, quantification: 0.20 },
     requiredSections: ['experience'],
     passingScore: 50,
+    tip: "Lever is search-dependent. Recruiters search for skills — make sure they're explicitly listed.",
+    prioritizes: {
+      checks: ['Explicitly listed skills (recruiter search-dependent)', 'Job titles matching searched roles', 'Location and availability clearly stated'],
+      crosses: ['Implied skills not explicitly named', 'Abbreviations (write Machine Learning not ML)'],
+    },
     applyQuirks(parsed, score) {
       let adj = 0;
       // lever-narrative: avg bullet 60-150 chars → +5
@@ -540,6 +620,11 @@ const PROFILES = [
     weights: { formatting: 0.25, keywordMatch: 0.25, sectionCompleteness: 0.20, experienceRelevance: 0.15, educationMatch: 0.10, quantification: 0.05 },
     requiredSections: ['contact', 'experience', 'education', 'skills'],
     passingScore: 65,
+    tip: 'SuccessFactors normalizes skills taxonomy. Spell out abbreviations (ML → Machine Learning).',
+    prioritizes: {
+      checks: ['Full skill names spelled out', 'Standardized job titles', 'Education section with degree + institution'],
+      crosses: ['Abbreviated or shortened skill names', 'Non-standard section names'],
+    },
     applyQuirks(parsed, score) {
       let adj = 0;
       // sf-structured-data: no dates detected → -10
@@ -560,7 +645,7 @@ function _scoreAgainstProfile(parsed, jdText, profile) {
   const kw  = matchKeywords(parsed.resumeText, jdText, profile.keywordStrategy);
   const fmt = _scoreFormatting(parsed, profile.parsingStrictness);
   const sec = _scoreSections(parsed.resumeSections, profile.requiredSections);
-  const exp = _scoreExperience(parsed.experienceBullets);
+  const exp = _scoreExperience(parsed.experienceBullets, parsed.resumeText);
   const edu = _scoreEducation(parsed.educationText);
 
   // quantification is a separate dimension derived from experience bullets (engine.ts:88)
@@ -570,7 +655,7 @@ function _scoreAgainstProfile(parsed, jdText, profile) {
 
   const { weights: w } = profile;
   const weighted =
-    fmt          * w.formatting +
+    fmt.score    * w.formatting +
     kw.score     * w.keywordMatch +
     sec.score    * w.sectionCompleteness +
     exp.score    * w.experienceRelevance +
@@ -583,6 +668,17 @@ function _scoreAgainstProfile(parsed, jdText, profile) {
     name: profile.name,
     score: final,
     verdict: final >= profile.passingScore ? 'likely pass' : 'likely fail',
+    breakdown: {
+      keyword: kw.score,
+      format: fmt.score,
+      experience: exp.score,
+      education: edu,
+    },
+    matchedKeywords: [...kw.matched, ...kw.synonymMatched].filter(SKILL_FILTER).slice(0, 8),
+    missingKeywords: kw.missing.filter(SKILL_FILTER).slice(0, 8),
+    formatIssues: fmt.issues,
+    tip: profile.tip,
+    prioritizes: profile.prioritizes,
   };
 }
 

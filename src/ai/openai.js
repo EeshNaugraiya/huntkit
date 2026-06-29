@@ -2,7 +2,7 @@ import { parseJSON } from './parse.js';
 
 const JSON_SYSTEM_PROMPT = 'IMPORTANT: Respond with raw JSON only. No markdown code fences, no ```json, no ``` wrapper, no explanation before or after. Just the JSON object.';
 
-export async function analyzeWithOpenAI(prompt, { apiKey }) {
+export async function analyzeWithOpenAI(prompt, { apiKey, maxTokens = 1024 }) {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -11,7 +11,7 @@ export async function analyzeWithOpenAI(prompt, { apiKey }) {
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       messages: [
         { role: 'system', content: JSON_SYSTEM_PROMPT },
         { role: 'user', content: prompt },

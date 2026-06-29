@@ -2,7 +2,7 @@ import { parseJSON } from './parse.js';
 
 const JSON_SYSTEM_PROMPT = 'IMPORTANT: Respond with raw JSON only. No markdown code fences, no ```json, no ``` wrapper, no explanation before or after. Just the JSON object.';
 
-export async function analyzeWithClaude(prompt, { apiKey }) {
+export async function analyzeWithClaude(prompt, { apiKey, maxTokens = 1024 }) {
   console.log('[claude] making request with key length:', apiKey?.length);
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -14,7 +14,7 @@ export async function analyzeWithClaude(prompt, { apiKey }) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       system: JSON_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
     }),

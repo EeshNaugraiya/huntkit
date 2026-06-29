@@ -17,7 +17,18 @@
     "https://api.anthropic.com/*",
     "https://dashscope.aliyuncs.com/*",
     "https://generativelanguage.googleapis.com/*",
-    "https://api.openai.com/*"
+    "https://api.openai.com/*",
+    "https://*.workday.com/*",
+    "https://*.myworkday.com/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.wd1.myworkdayjobs.com/*",
+    "https://*.wd2.myworkdayjobs.com/*",
+    "https://*.wd3.myworkdayjobs.com/*",
+    "https://*.wd4.myworkdayjobs.com/*",
+    "https://*.wd5.myworkdayjobs.com/*",
+    "https://*.greenhouse.io/*",
+    "https://*.lever.co/*",
+    "https://*.icims.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -58,15 +69,32 @@
       ],
       "js": ["src/content/indeed.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.workday.com/*",
+        "https://*.myworkday.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://*.greenhouse.io/*",
+        "https://*.lever.co/*"
+      ],
+      "js": ["src/content/generic.js"],
+      "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": [{
-    "resources": ["src/sidebar/index.html", "src/sidebar/index.js", "client.js", "pdf.worker.min.js"],
-    "matches": [
-      "https://www.linkedin.com/*",
-      "https://www.naukri.com/*",
-      "https://www.indeed.com/*",
-      "https://in.indeed.com/*"
-    ]
-  }]
+  "web_accessible_resources": [
+    {
+      "resources": ["src/sidebar/index.html", "src/sidebar/index.js", "client.js", "pdf.worker.min.js"],
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://www.naukri.com/*",
+        "https://www.indeed.com/*",
+        "https://in.indeed.com/*"
+      ]
+    },
+    {
+      "resources": ["src/profile/index.html", "src/profile/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

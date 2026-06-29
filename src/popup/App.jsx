@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const TABS = ['Resume', 'Settings'];
+const TABS = ['Resume', 'Profile', 'Settings'];
 
 // Routes storage reads/writes through the background service worker.
 function sendMsg(type, payload = {}) {
@@ -79,6 +79,7 @@ export default function App() {
       {/* Content */}
       <div style={{ flex: 1, padding: 20, overflowY: 'auto' }}>
         {tab === 'Resume' && <ResumePanel />}
+        {tab === 'Profile' && <ProfilePanel />}
         {tab === 'Settings' && <SettingsPanel settings={settings} onChange={setSettings} />}
       </div>
 
@@ -326,6 +327,122 @@ function ResumeCard({ resume, onDelete, onSetDefault }) {
         }}>
           Set as Default
         </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Profile Panel ────────────────────────────────────────────────────────────
+
+function ProfilePanel() {
+  const [profile, setProfile] = useState(null);
+  const [autofillStatus, setAutofillStatus] = useState('');
+
+  useEffect(() => {
+    loadProfile();
+    const listener = (changes) => { if (changes.userProfile) loadProfile(); };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, []);
+
+  async function loadProfile() {
+    try {
+      const { profile: p } = await sendMsg('GET_PROFILE');
+      setProfile(p);
+    } catch (err) {
+      console.error('loadProfile failed:', err);
+    }
+  }
+
+  function openProfileForm() {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/profile/index.html') });
+  }
+
+  async function handleAutofill() {
+    setAutofillStatus('');
+    try {
+      const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
+      const tab = tabs[0];
+      const { profile: p } = await sendMsg('GET_PROFILE');
+      if (!p || !p.firstName) {
+        setAutofillStatus('Complete your profile first');
+        return;
+      }
+      function showResult(filled) {
+        setAutofillStatus(filled > 0 ? `✓ Filled ${filled} fields` : 'No fields matched');
+      }
+      chrome.tabs.sendMessage(tab.id, { type: 'AUTOFILL', payload: { profile: p } }, async (response) => {
+        if (chrome.runtime.lastError) {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['src/content/generic.js'],
+            });
+            setTimeout(() => {
+              chrome.tabs.sendMessage(tab.id, { type: 'AUTOFILL', payload: { profile: p } }, (res) => {
+                if (chrome.runtime.lastError) {
+                  setAutofillStatus('Cannot autofill this page');
+                  return;
+                }
+                showResult(res?.filled || 0);
+              });
+            }, 500);
+          } catch (_injectErr) {
+            setAutofillStatus('Cannot autofill this page');
+          }
+          return;
+        }
+        showResult(response?.filled || 0);
+      });
+    } catch (err) {
+      setAutofillStatus('Error: ' + err.message);
+    }
+  }
+
+  const hasProfile = profile && (profile.firstName || profile.email);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{
+        padding: '10px 14px',
+        background: hasProfile ? '#0d1f0d' : '#18181b',
+        border: `1px solid ${hasProfile ? '#16a34a' : '#27272a'}`,
+        borderRadius: 8,
+        fontSize: 13,
+        color: hasProfile ? '#86efac' : '#52525b',
+        lineHeight: 1.4,
+      }}>
+        {hasProfile
+          ? `✓ Profile saved — ${profile.firstName}${profile.email ? ` · ${profile.email}` : ''}`
+          : 'No profile saved yet'
+        }
+      </div>
+
+      <button onClick={openProfileForm} style={{
+        padding: '10px 16px', background: '#6366f1', color: 'white',
+        border: 'none', borderRadius: 8, cursor: 'pointer',
+        fontWeight: 600, fontSize: 13,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+      }}>
+        <span>📝</span> Open Profile Form
+      </button>
+
+      <button onClick={handleAutofill} style={{
+        padding: '10px 16px', background: '#18181b', color: '#a78bfa',
+        border: '1px solid #4338ca', borderRadius: 8, cursor: 'pointer',
+        fontWeight: 600, fontSize: 13,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+      }}>
+        🤖 Autofill Current Page
+      </button>
+
+      {autofillStatus && (
+        <p style={{
+          fontSize: 12, textAlign: 'center', padding: '2px 0',
+          color: autofillStatus.startsWith('✓') ? '#86efac' : '#fbbf24',
+        }}>
+          {autofillStatus}
+        </p>
       )}
     </div>
   );

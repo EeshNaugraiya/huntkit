@@ -1,3 +1,5 @@
+import { autofillPage } from '../utils/form-filler.js';
+
 const BUTTON_ID = 'huntkit-analyze-btn';
 const TRIGGER_ID = 'huntkit-sidebar-trigger';
 
@@ -206,7 +208,7 @@ export function showNewJobToast() {
   setTimeout(() => toast.remove(), 8000);
 }
 
-function showToast(message, type = 'info') {
+export function showToast(message, type = 'info') {
   const toast = document.createElement('div');
   toast.textContent = message;
   toast.style.cssText = `
@@ -224,3 +226,17 @@ function showToast(message, type = 'info') {
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 4000);
 }
+
+chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
+  if (msg.type === 'AUTOFILL') {
+    console.log('[huntkit] AUTOFILL message received, profile:', JSON.stringify(msg.payload?.profile).slice(0, 200));
+    autofillPage(msg.payload.profile).then(filled => {
+      sendResponse({ filled });
+      showToast(filled > 0
+        ? `✓ Filled ${filled} fields`
+        : 'No matching fields found on this page');
+    }).catch(() => sendResponse({ filled: 0 }));
+    return true;
+  }
+  return true;
+});

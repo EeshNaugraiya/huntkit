@@ -536,7 +536,7 @@ function PlatformBreakdown({ jdText }) {
       </button>
 
       {open && (
-        <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+        <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           {loading && (
             <p style={{ fontSize: 12, color: '#71717a', textAlign: 'center', margin: '4px 0' }}>Scoring platforms…</p>
           )}
@@ -545,32 +545,14 @@ function PlatformBreakdown({ jdText }) {
           )}
           {atsFit?.platforms && (
             <>
-              {atsFit.platforms.map((p, i) => {
-                const pct = Math.round(p.score);
-                const isGreen = pct >= 70;
-                const isRed = pct < 45;
-                const dot = isGreen ? '🟢' : isRed ? '🔴' : '🟡';
-                const color = isGreen ? '#22c55e' : isRed ? '#ef4444' : '#f59e0b';
-                const isBest = i === 0;
-                const isWorst = i === atsFit.platforms.length - 1;
-                return (
-                  <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
-                    <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0 }}>{dot}</span>
-                    <span style={{ flex: 1, color: '#d4d4d8', fontWeight: isBest ? 600 : 400 }}>{p.name}</span>
-                    <span style={{ fontWeight: 700, color, minWidth: 34, textAlign: 'right' }}>{pct}%</span>
-                    {isBest && (
-                      <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 500, flexShrink: 0 }}>
-                        Most likely to pass
-                      </span>
-                    )}
-                    {isWorst && !isBest && (
-                      <span style={{ fontSize: 10, color: '#71717a', flexShrink: 0 }}>
-                        Hardest to pass
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+              {atsFit.platforms.map((p, i) => (
+                <PlatformRow
+                  key={p.name}
+                  platform={p}
+                  isBest={i === 0}
+                  isWorst={i === atsFit.platforms.length - 1 && atsFit.platforms.length > 1}
+                />
+              ))}
               <div style={{
                 marginTop: 4,
                 paddingTop: 8,
@@ -587,6 +569,140 @@ function PlatformBreakdown({ jdText }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function PlatformRow({ platform: p, isBest, isWorst }) {
+  const [open, setOpen] = useState(false);
+  const pct = Math.round(p.score);
+  const isGreen = pct >= 70;
+  const isRed = pct < 45;
+  const dot = isGreen ? '🟢' : isRed ? '🔴' : '🟡';
+  const color = isGreen ? '#22c55e' : isRed ? '#ef4444' : '#f59e0b';
+
+  return (
+    <div style={{ border: '1px solid #27272a', borderRadius: 8, overflow: 'hidden' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          width: '100%',
+          padding: '9px 10px',
+          background: open ? '#1c1c1f' : 'none',
+          border: 'none',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+        }}
+      >
+        <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0 }}>{dot}</span>
+        <span style={{ flex: 1, color: '#d4d4d8', fontWeight: isBest ? 600 : 400, fontSize: 12, textAlign: 'left' }}>{p.name}</span>
+        <span style={{ fontWeight: 700, color, fontSize: 12, minWidth: 34, textAlign: 'right' }}>{pct}%</span>
+        {isBest && <span style={{ fontSize: 9, color: '#22c55e', fontWeight: 500, flexShrink: 0 }}>Best</span>}
+        {isWorst && !isBest && <span style={{ fontSize: 9, color: '#71717a', flexShrink: 0 }}>Hardest</span>}
+        <span style={{ color: '#52525b', fontSize: 10, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '10px 12px 12px', borderTop: '1px solid #27272a', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p style={{ margin: 0, fontSize: 10, color: '#52525b', fontStyle: 'italic', lineHeight: 1.5 }}>
+            Scores are simulated based on each platform's known parsing behavior. Not affiliated with any ATS vendor.
+          </p>
+
+          {p.breakdown && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[
+                { label: 'Keyword', val: p.breakdown.keyword },
+                { label: 'Format', val: p.breakdown.format },
+                { label: 'Experience', val: p.breakdown.experience },
+                { label: 'Education', val: p.breakdown.education },
+              ].map(({ label, val }) => (
+                <MiniScoreBar key={label} label={label} value={val} />
+              ))}
+            </div>
+          )}
+
+          {p.matchedKeywords?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#71717a', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>
+                Matched Keywords
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {p.matchedKeywords.map((kw) => (
+                  <span key={kw} style={{ padding: '2px 8px', background: '#14532d', color: '#86efac', borderRadius: 12, fontSize: 10, fontWeight: 500 }}>
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {p.missingKeywords?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#71717a', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>
+                Missing Keywords
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {p.missingKeywords.map((kw) => (
+                  <span key={kw} style={{ padding: '2px 8px', background: '#450a0a', color: '#fca5a5', borderRadius: 12, fontSize: 10, fontWeight: 500 }}>
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {p.formatIssues?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#71717a', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>
+                Format Issues
+              </div>
+              <ul style={{ margin: 0, padding: '0 0 0 14px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {p.formatIssues.map((issue, i) => (
+                  <li key={i} style={{ fontSize: 11, color: '#f59e0b', lineHeight: 1.4 }}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {p.prioritizes && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#71717a', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>
+                What this ATS prioritizes
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {p.prioritizes.checks.map((item, i) => (
+                  <div key={i} style={{ fontSize: 11, color: '#86efac', lineHeight: 1.4 }}>✓ {item}</div>
+                ))}
+                {p.prioritizes.crosses.map((item, i) => (
+                  <div key={i} style={{ fontSize: 11, color: '#fca5a5', lineHeight: 1.4 }}>✗ {item}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {p.tip && (
+            <p style={{ margin: 0, fontSize: 11, color: '#a78bfa', fontStyle: 'italic', lineHeight: 1.5 }}>
+              {p.tip}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniScoreBar({ label, value }) {
+  const pct = Math.round(value ?? 0);
+  const color = pct >= 70 ? '#22c55e' : pct >= 45 ? '#f59e0b' : '#ef4444';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontSize: 10, color: '#71717a', minWidth: 64, flexShrink: 0 }}>{label}</span>
+      <div style={{ flex: 1, height: 4, background: '#27272a', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 2 }} />
+      </div>
+      <span style={{ fontSize: 10, color, fontWeight: 600, minWidth: 28, textAlign: 'right' }}>{pct}%</span>
     </div>
   );
 }

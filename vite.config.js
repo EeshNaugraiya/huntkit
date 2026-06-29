@@ -11,6 +11,7 @@ export default defineConfig({
         'src/popup/index.html',
         'src/sidebar/index.html',
         'src/resume/index.html',
+        'src/profile/index.html',
         'src/content/linkedin.js',
         'src/content/naukri.js',
         'src/content/indeed.js',

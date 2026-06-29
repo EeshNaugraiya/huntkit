@@ -1,4 +1,4 @@
-import { analyzeJD, rewriteBullets, generateQuestions, generateRoadmap } from '../ai/index.js';
+import { analyzeJD, rewriteBullets, generateQuestions, generateRoadmap, extractProfileFromResume } from '../ai/index.js';
 import { scoreAllPlatforms } from '../ai/ats-profiles.js';
 import { saveJob, findDuplicate } from '../storage/tracker.js';
 import { getAllResumes, addResume, deleteResume, setDefaultResume } from '../storage/resume.js';
@@ -93,6 +93,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
+
+  if (message.type === 'GET_PROFILE') {
+    chrome.storage.local.get('userProfile').then(({ userProfile }) => {
+      sendResponse({ profile: userProfile || null });
+    }).catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'SAVE_PROFILE') {
+    chrome.storage.local.set({ userProfile: message.payload.profile }).then(() => {
+      sendResponse({ success: true });
+    }).catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'GET_SETTINGS') {
+    chrome.storage.local.get(['aiProvider', 'anthropicApiKey', 'qwenApiKey', 'geminiApiKey', 'openaiApiKey'])
+      .then((settings) => sendResponse({ settings }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'IMPORT_PROFILE_FROM_RESUME') {
+    handleImportProfileFromResume().then(sendResponse).catch((err) => {
+      sendResponse({ error: err.message });
+    });
+    return true;
+  }
 });
 
 async function getSettings() {
@@ -154,6 +182,20 @@ async function handleGenerateRoadmap(payload) {
   return generateRoadmap({
     jdText: payload.jdText,
     resumeText: resolveDefaultResumeText(settings),
+    provider: settings.aiProvider,
+    anthropicApiKey: settings.anthropicApiKey,
+    qwenApiKey: settings.qwenApiKey,
+    geminiApiKey: settings.geminiApiKey,
+    openaiApiKey: settings.openaiApiKey,
+  });
+}
+
+async function handleImportProfileFromResume() {
+  const settings = await getSettings();
+  const resumeText = resolveDefaultResumeText(settings);
+  if (!resumeText) throw new Error('No resume found. Upload a resume in the Resume tab first.');
+  return extractProfileFromResume({
+    resumeText,
     provider: settings.aiProvider,
     anthropicApiKey: settings.anthropicApiKey,
     qwenApiKey: settings.qwenApiKey,

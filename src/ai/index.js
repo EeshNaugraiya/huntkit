@@ -43,12 +43,37 @@ export async function analyzeJD({ jdText, resumeText, provider, anthropicApiKey,
   }
 }
 
-async function callProvider(prompt, { provider, anthropicApiKey, qwenApiKey, geminiApiKey, openaiApiKey }) {
-  if (provider === 'claude') return analyzeWithClaude(prompt, { apiKey: anthropicApiKey });
-  if (provider === 'qwen') return analyzeWithQwen(prompt, { apiKey: qwenApiKey });
-  if (provider === 'gemini') return analyzeWithGemini(prompt, { apiKey: geminiApiKey });
-  if (provider === 'openai') return analyzeWithOpenAI(prompt, { apiKey: openaiApiKey });
+async function callProvider(prompt, { provider, anthropicApiKey, qwenApiKey, geminiApiKey, openaiApiKey, maxTokens = 1024 }) {
+  if (provider === 'claude') return analyzeWithClaude(prompt, { apiKey: anthropicApiKey, maxTokens });
+  if (provider === 'qwen') return analyzeWithQwen(prompt, { apiKey: qwenApiKey, maxTokens });
+  if (provider === 'gemini') return analyzeWithGemini(prompt, { apiKey: geminiApiKey, maxTokens });
+  if (provider === 'openai') return analyzeWithOpenAI(prompt, { apiKey: openaiApiKey, maxTokens });
   return null;
+}
+
+const EXTRACT_PROFILE_PROMPT = (resumeText) => `Extract structured profile information from this resume.
+Return ONLY a JSON object with these exact keys:
+{
+  "firstName": "", "lastName": "", "email": "", "phone": "",
+  "city": "", "state": "", "country": "", "zipCode": "",
+  "linkedin": "", "github": "", "portfolio": "",
+  "currentJob": { "isEmployed": false, "company": "", "title": "", "location": "", "startMonth": "", "startYear": "", "description": "" },
+  "experience": [{ "company": "", "title": "", "type": "full-time", "location": "", "startMonth": "", "startYear": "", "endMonth": "", "endYear": "", "description": "" }],
+  "education": [{ "institution": "", "degree": "", "field": "", "startYear": "", "endYear": "", "gpa": "", "honors": "" }],
+  "skills": "", "languages": "", "tools": "",
+  "expectedCTC": "", "noticePeriod": ""
+}
+Set isEmployed to true if the person has a current/ongoing job with no end date.
+For missing fields use empty string. Return raw JSON only, no markdown.
+
+RESUME:
+${resumeText}`.trim();
+
+export async function extractProfileFromResume({ resumeText, provider, anthropicApiKey, qwenApiKey, geminiApiKey, openaiApiKey }) {
+  const prompt = EXTRACT_PROFILE_PROMPT(resumeText);
+  const raw = await callProvider(prompt, { provider, anthropicApiKey, qwenApiKey, geminiApiKey, openaiApiKey, maxTokens: 3000 });
+  if (!raw) throw new Error('No AI provider configured. Set an API key in Settings.');
+  return raw;
 }
 
 const REWRITE_BULLETS_PROMPT = (jdText, bulletsText) => `

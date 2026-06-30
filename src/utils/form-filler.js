@@ -68,17 +68,84 @@ export function matchProfile(hint, profile, eduIdx = 0, expIdx = 0) {
 }
 
 // ─── React props fill ─────────────────────────────────────────────────────────
-function fillViaReactProps(el, value) {
+async function fillViaReactProps(el, value) {
   for (const key in el) {
     if (!key.startsWith('__reactProps')) continue;
     const props = el[key];
     if (!props) return false;
-    el.value = value;
-    props.onChange?.({ target: el, currentTarget: el, preventDefault: () => {} });
-    props.onBlur?.({ target: el, currentTarget: el });
+
+    // Set DOM value via native setter so el.value reflects it when React reads target.value
+    const proto = el.tagName === 'TEXTAREA'
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, value); else el.value = value;
+
+    if (el._valueTracker) el._valueTracker.setValue('');
+
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Call onChange if it exists (some fields have it)
+    props.onChange?.({
+      target: el,
+      currentTarget: el,
+      type: 'change',
+      bubbles: true,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+
+    // CRITICAL: ALWAYS call onBlur — confirmed commit mechanism for Workday text
+    // fields even when onChange exists. relatedTarget:null matches a real blur event.
+    props.onBlur?.({
+      target: el,
+      currentTarget: el,
+      type: 'blur',
+      relatedTarget: null,
+      bubbles: true,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+
+    // Give React time to process the blur and flush validation state
+    await new Promise(r => setTimeout(r, 150));
+
+    // Retry onBlur once if aria-invalid persists despite value being set
+    if (el.getAttribute('aria-invalid') === 'true') {
+      console.warn('[huntkit] field still invalid after fill, retrying onBlur');
+      for (const k in el) {
+        if (k.startsWith('__reactProps')) {
+          el[k].onBlur?.({
+            target: el, currentTarget: el, type: 'blur',
+            relatedTarget: null, bubbles: true,
+            preventDefault: () => {}, stopPropagation: () => {},
+          });
+        }
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
+
     return true;
   }
   return false;
+}
+
+// ─── Verify React internal state actually updated (blur/refocus check) ────────
+async function verifyReactState(el) {
+  const valueBefore = el.value;
+  el.blur();
+  await sleep(100);
+  el.focus();
+  await sleep(100);
+  const valueAfter = el.value;
+  if (valueBefore !== valueAfter) {
+    console.warn('[huntkit] STATE DESYNC detected:', 'before:', valueBefore, 'after:', valueAfter);
+    return false;
+  }
+  return true;
 }
 
 // ─── Get React internal props from a DOM element ─────────────────────────────
@@ -115,10 +182,10 @@ function fillNative(el, value) {
   return true;
 }
 
-export function fillField(el, value) {
+export async function fillField(el, value) {
   if (!value) return false;
   try {
-    return fillViaReactProps(el, value) || fillNative(el, value);
+    return (await fillViaReactProps(el, value)) || fillNative(el, value);
   } catch {
     return false;
   }
@@ -229,7 +296,7 @@ async function fillWorkdayMultiselect(container, value) {
   input.focus();
   await sleep(300);
 
-  fillViaReactProps(input, String(value)) || fillNative(input, String(value));
+  (await fillViaReactProps(input, String(value))) || fillNative(input, String(value));
   await sleep(800);
 
   const listbox = document.querySelector('ul[role="listbox"], [data-automation-id="promptSelectionLabel"]');
@@ -268,7 +335,7 @@ async function fillWorkdayField(container, value, isMultiselect) {
   }
 
   const input = container.querySelector('input, textarea');
-  if (input && isVisible(input)) return fillViaReactProps(input, String(value)) || fillNative(input, String(value));
+  if (input && isVisible(input)) return (await fillViaReactProps(input, String(value))) || fillNative(input, String(value));
 
   const select = container.querySelector('select');
   if (select && isVisible(select)) return fillSelect(select, String(value));
@@ -300,66 +367,80 @@ function scrollToCenter(el) {
   el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-function verifyFilled(container, expectedValue) {
-  if (!expectedValue) return false;
-  const input = container?.querySelector('input, textarea');
-  return !!input?.value?.toLowerCase().includes(String(expectedValue).toLowerCase().slice(0, 5));
-}
 
-// ─── Workday: find Add button with 4 fallback strategies ─────────────────────
-function findAddButton() {
-  const allBtns = [...document.querySelectorAll('button')];
 
-  const btn1 = document.querySelector('[data-automation-id="add-button"]');
-  if (btn1 && isVisible(btn1)) return btn1;
-
-  const btn2 = allBtns.find(b => /^\s*add\s*$/i.test(b.textContent) && isVisible(b));
-  if (btn2) return btn2;
-
-  const btn3 = allBtns.find(b =>
-    (b.getAttribute('aria-label') || '').toLowerCase().includes('add') && isVisible(b)
+// ─── Workday: find Add button for a specific section by heading context ───────
+// On "My Experience" there are 4 add-buttons (Work Experience, Education,
+// Languages, Websites). Walk up the DOM to find the nearest heading and match
+// the requested section name so we click the RIGHT one.
+function findAddButtonForSection(sectionName) {
+  const addButtons = Array.from(
+    document.querySelectorAll('[data-automation-id="add-button"]')
   );
-  if (btn3) return btn3;
 
-  const btn4 = allBtns.find(b =>
-    (b.textContent.includes('+') || b.innerHTML.includes('plus')) && isVisible(b)
-  );
-  if (btn4) return btn4;
+  for (const btn of addButtons) {
+    if (!isVisible(btn)) continue;
+
+    let parent = btn.parentElement;
+    let context = '';
+    for (let j = 0; j < 8 && parent; j++) {
+      const heading = parent.querySelector(
+        'h1, h2, h3, h4, legend, [data-automation-id*="Section"]'
+      );
+      if (heading) {
+        context = heading.textContent.trim().toLowerCase();
+        break;
+      }
+      parent = parent.parentElement;
+    }
+
+    if (context.includes(sectionName.toLowerCase())) {
+      return btn;
+    }
+  }
 
   return null;
 }
 
 // ─── Workday: ensure enough repeating sections exist (polling-based wait) ────
 async function ensureWorkdaySections(fieldName, neededCount) {
-  console.log('[huntkit] ensureWorkdaySections:', fieldName, 'need', neededCount, 'have', groupFieldsBySectionIndex(fieldName).length);
-  for (let i = 0; i < neededCount - 1; i++) {
-    const before = groupFieldsBySectionIndex(fieldName).length;
-    if (before >= neededCount) break;
+  const sectionMap = {
+    'jobTitle': 'work experience',
+    'schoolName': 'education',
+  };
+  const sectionName = sectionMap[fieldName] || fieldName;
 
-    const addBtn = findAddButton();
+  let current = groupFieldsBySectionIndex(fieldName).length;
+
+  while (current < neededCount) {
+    console.log('[huntkit] ensuring section', current + 1, 'for', fieldName);
+    const addBtn = findAddButtonForSection(sectionName);
     if (!addBtn) {
-      console.log('[huntkit] Add button not found for', fieldName);
+      console.warn('[huntkit] No add button found for section:', sectionName);
       break;
     }
 
-    console.log('[huntkit] clicking Add button, before count:', before);
+    console.log('[huntkit] clicking Add for', sectionName, '- current count:', current);
     addBtn.click();
 
     let waited = 0;
+    let newCount = current;
     while (waited < 5000) {
       await sleep(300);
       waited += 300;
-      if (groupFieldsBySectionIndex(fieldName).length > before) {
-        console.log('[huntkit] new section appeared after', waited, 'ms');
+      newCount = groupFieldsBySectionIndex(fieldName).length;
+      if (newCount > current) {
+        console.log('[huntkit] new', sectionName, 'section appeared after', waited, 'ms');
         break;
       }
     }
 
-    if (groupFieldsBySectionIndex(fieldName).length <= before) {
-      console.log('[huntkit] Add button click failed — section count unchanged');
+    if (newCount <= current) {
+      console.warn('[huntkit] Add click had no effect for', sectionName);
       break;
     }
 
+    current = newCount;
     await sleep(500);
   }
 }
@@ -370,18 +451,24 @@ async function fillWorkdayDate(container, monthValue, yearValue) {
   const monthInput = container.querySelector('input[aria-label="Month"]');
   const yearInput  = container.querySelector('input[aria-label="Year"]');
   if (monthInput && monthValue && isVisible(monthInput)) {
-    fillViaReactProps(monthInput, String(monthValue)) || fillNative(monthInput, String(monthValue));
+    (await fillViaReactProps(monthInput, String(monthValue))) || fillNative(monthInput, String(monthValue));
     await sleep(200);
   }
   if (yearInput && yearValue && isVisible(yearInput)) {
-    fillViaReactProps(yearInput, String(yearValue)) || fillNative(yearInput, String(yearValue));
+    (await fillViaReactProps(yearInput, String(yearValue))) || fillNative(yearInput, String(yearValue));
     await sleep(200);
   }
 }
 
 // ─── Workday: skills typeahead — one skill at a time ─────────────────────────
+// Confirmed DOM: activeListContainer listbox → role="option" items with
+// data-automation-id="checkbox" wrapper div that toggles the inner checkbox.
+// Confirmed fix: full keydown+keypress+keyup sequence (with code/keyCode/which/
+// cancelable) is required to trigger the Workday search handler.
 async function fillWorkdaySkills(profile) {
-  const container = document.querySelector('[data-automation-id="formField-skills"]');
+  const container = document.querySelector(
+    '[data-automation-id="formField-skills"]'
+  );
   if (!container) return;
 
   const skillsList = (profile.skills || '')
@@ -390,81 +477,121 @@ async function fillWorkdaySkills(profile) {
     .filter(Boolean)
     .slice(0, 10);
 
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+  ).set;
+
+  const enterProps = {
+    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+    bubbles: true, cancelable: true,
+  };
+
   for (const skill of skillsList) {
     try {
-      // Re-query input FRESH every iteration — Workday re-renders it after each selection
-      const getInput = () => container.querySelector(
-        '[data-automation-id="monikerSearchBox"],' +
-        '[data-automation-id="multiselectInputContainer"] input,' +
-        'input[type="text"]'
-      );
-
-      let input = getInput();
-      if (!input || !isVisible(input)) continue;
-
-      input.click();
-      input.focus();
-      await sleep(300);
-
-      // Re-query after click/focus in case Workday re-rendered
-      input = getInput();
+      const input = container.querySelector('input');
       if (!input || !document.contains(input)) continue;
 
-      fillViaReactProps(input, skill) || fillNative(input, skill);
-      await sleep(1200);
+      input.focus();
+      input.click();
+      await sleep(200);
 
-      // Strategy 1: promptOption (job_app_filler selector)
-      const promptOptions = document.querySelectorAll('[data-automation-id="promptOption"]');
-      if (promptOptions.length > 0) {
-        const match = [...promptOptions].find(o =>
-          o.textContent.toLowerCase().includes(skill.toLowerCase().slice(0, 8))
-        ) || promptOptions[0];
-        match.click();
-        await sleep(600);
-        continue;
-      }
+      // Set full value at once and notify React
+      setter.call(input, skill);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
 
-      // Strategy 2: ReactVirtualized grid (autofill-jobs selector)
-      const rvItems = document.querySelectorAll(
-        '.ReactVirtualized__Grid__innerScrollContainer [aria-label]'
-      );
-      if (rvItems.length > 0) {
-        const match = [...rvItems].find(o =>
-          (o.getAttribute('aria-label') || '').toLowerCase().includes(skill.toLowerCase().slice(0, 6))
-        ) || rvItems[0];
-        match.click();
-        await sleep(600);
-        continue;
-      }
-
-      // No dropdown — re-query before escape (element may have changed)
-      input = getInput();
-      if (input && document.contains(input)) {
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+      for (const key in input) {
+        if (key.startsWith('__reactProps')) {
+          input[key].onChange?.({ target: input, currentTarget: input });
+        }
       }
       await sleep(300);
+
+      // Full Enter sequence confirmed to trigger Workday search
+      input.dispatchEvent(new KeyboardEvent('keydown', enterProps));
+      input.dispatchEvent(new KeyboardEvent('keypress', enterProps));
+      input.dispatchEvent(new KeyboardEvent('keyup', enterProps));
+
+      // Confirmed: ~15 options appear after ~1.5s
+      await sleep(1500);
+
+      const listbox = document.querySelector(
+        '[data-automation-id="activeListContainer"]'
+      );
+      if (!listbox) {
+        console.warn('[huntkit] no listbox for skill:', skill);
+        continue;
+      }
+
+      const options = listbox.querySelectorAll('[role="option"]');
+      console.log('[huntkit] skill options found:', options.length, 'for', skill);
+
+      const searchVal = skill.toLowerCase();
+      const match = [...options].find(o =>
+        (o.id || '').toLowerCase().includes(searchVal) ||
+        (o.getAttribute('aria-label') || '').toLowerCase().includes(searchVal)
+      ) || options[0];
+
+      if (match) {
+        const checkboxDiv = match.querySelector('[data-automation-id="checkbox"]');
+        if (checkboxDiv) {
+          checkboxDiv.click();
+        } else {
+          match.click();
+        }
+        await sleep(500);
+
+        // Confirm selection with same full Enter sequence
+        input.dispatchEvent(new KeyboardEvent('keydown', enterProps));
+        input.dispatchEvent(new KeyboardEvent('keypress', enterProps));
+        input.dispatchEvent(new KeyboardEvent('keyup', enterProps));
+        await sleep(500);
+
+        const freshInput = container.querySelector('input');
+        if (freshInput && document.contains(freshInput)) {
+          freshInput.click();
+          freshInput.focus();
+          await sleep(300);
+        }
+      } else {
+        console.warn('[huntkit] no match for skill:', skill);
+      }
+
+      // Clear for next skill
+      const freshInput2 = container.querySelector('input');
+      if (freshInput2 && document.contains(freshInput2)) {
+        setter.call(freshInput2, '');
+        freshInput2.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      await sleep(400);
 
     } catch (e) {
       console.warn('[huntkit] skill fill error for', skill, e.message);
+      continue;
     }
   }
 }
 
 // ─── Workday: job description textarea or contenteditable ────────────────────
+// Tries roleDescription first (confirmed Workday field name), then jobDescription.
 async function fillWorkdayDescription(exp, index) {
-  const descContainers = groupFieldsBySectionIndex('jobDescription');
-  if (descContainers[index]) {
-    const textarea = descContainers[index].querySelector('textarea');
-    const richText = descContainers[index].querySelector('[contenteditable="true"], [role="textbox"]');
-    if (textarea && isVisible(textarea)) {
-      fillTextareaViaBlur(textarea, exp.description) || fillNative(textarea, exp.description);
-      return;
-    }
-    if (richText && isVisible(richText)) {
-      richText.focus();
-      richText.textContent = exp.description;
-      richText.dispatchEvent(new Event('input', { bubbles: true }));
-      return;
+  for (const fieldName of ['roleDescription', 'jobDescription']) {
+    const containers = groupFieldsBySectionIndex(fieldName);
+    console.log('[huntkit] fillWorkdayDescription index', index, 'fieldName', fieldName, 'containers:', containers.length);
+    if (containers[index]) {
+      const textarea = containers[index].querySelector('textarea');
+      const richText = containers[index].querySelector('[contenteditable="true"], [role="textbox"]');
+      console.log('[huntkit] EXP', index, fieldName, '— textarea:', !!textarea, 'contenteditable:', !!richText);
+      if (textarea && isVisible(textarea)) {
+        fillTextareaViaBlur(textarea, exp.description) || fillNative(textarea, exp.description);
+        return;
+      }
+      if (richText && isVisible(richText)) {
+        richText.focus();
+        richText.textContent = exp.description;
+        richText.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
     }
   }
   const allTextareas = [...document.querySelectorAll('textarea')].filter(t => isVisible(t) && !t.value);
@@ -478,6 +605,43 @@ async function fillWorkdayDescription(exp, index) {
     editables[index].textContent = exp.description;
     editables[index].dispatchEvent(new Event('input', { bubbles: true }));
   }
+}
+
+// ─── Workday: final validation sweep — re-fires onBlur on any aria-invalid fields ─
+async function finalValidationSweep() {
+  await sleep(500);
+
+  const invalidFields = document.querySelectorAll('[aria-invalid="true"]');
+  console.log('[huntkit] final sweep — invalid fields found:', invalidFields.length);
+
+  for (const field of invalidFields) {
+    const value = field.value;
+    if (!value) continue;
+
+    console.log('[huntkit] re-fixing invalid field:', field.id, 'value:', value);
+
+    for (const key in field) {
+      if (key.startsWith('__reactProps')) {
+        const props = field[key];
+        props.onChange?.({
+          target: field, currentTarget: field, type: 'change',
+          bubbles: true, preventDefault: () => {}, stopPropagation: () => {},
+        });
+        await sleep(100);
+        props.onBlur?.({
+          target: field, currentTarget: field, type: 'blur',
+          relatedTarget: null, bubbles: true,
+          preventDefault: () => {}, stopPropagation: () => {},
+        });
+      }
+    }
+    await sleep(300);
+  }
+
+  await sleep(500);
+  const stillInvalid = document.querySelectorAll('[aria-invalid="true"]');
+  console.log('[huntkit] after re-fix sweep, still invalid:', stillInvalid.length);
+  stillInvalid.forEach(f => console.log(' -', f.id, f.value));
 }
 
 // ─── Workday: main page-aware autofill ───────────────────────────────────────
@@ -513,12 +677,20 @@ async function autofillWorkday(profile) {
         ...(profile.experience || []),
       ].filter(e => e?.company);
 
-      if (allExp.length > 0) {
-        await ensureWorkdaySections('jobTitle', allExp.length);
-        const titleContainers = groupFieldsBySectionIndex('jobTitle');
-        console.log('[huntkit] exp sections after ensure:', titleContainers.length, '/ need:', allExp.length);
+      for (let i = 0; i < allExp.length; i++) {
+        const exp = allExp[i];
 
-        // tryFill re-queries containers each call so indexes stay fresh after DOM updates
+        console.log('[huntkit] ensuring section', i, 'for jobTitle');
+        await ensureWorkdaySections('jobTitle', i + 1);
+
+        const titleContainers = groupFieldsBySectionIndex('jobTitle');
+        if (!titleContainers[i]) {
+          console.warn('[huntkit] experience section', i, 'still missing after add');
+          continue;
+        }
+
+        console.log('[huntkit] section', i, 'ready, filling fields for exp:', exp.title, '|', exp.company);
+
         const tryFill = async (fieldName, value, isMultiselect = false) => {
           const containers = groupFieldsBySectionIndex(fieldName);
           const c = containers[i];
@@ -527,104 +699,162 @@ async function autofillWorkday(profile) {
           if (!isVisible(input)) { console.log('[huntkit]', fieldName, i, 'not visible'); return false; }
           scrollToCenter(c);
           const result = await fillWithRetry(c, value, isMultiselect);
-          console.log('[huntkit]', fieldName, i, '→', result, String(value ?? '').slice(0, 40));
+          console.log('[huntkit] section', i, 'field', fieldName, 'filled:', result);
+          if (result && input) await verifyReactState(input);
           await sleep(200);
           return result;
         };
 
-        for (var i = 0; i < Math.min(titleContainers.length, allExp.length); i++) {
-          const exp = allExp[i];
-          console.log('[huntkit] filling exp', i, exp.title, '|', exp.company);
+        // ── jobTitle diagnostic block ──────────────────────────────────────────
+        {
+          const titleInput = titleContainers[i].querySelector('input');
+          console.log('[huntkit] BEFORE fill - jobTitle', i, 'value:', titleInput?.value);
 
-          await tryFill('jobTitle', exp.title);
-          await tryFill('companyName', exp.company);
+          const fillResult = await fillWorkdayField(titleContainers[i], exp.title, false);
+          console.log('[huntkit] fillWorkdayField result:', fillResult);
 
-          const locContainers = groupFieldsBySectionIndex('jobLocation');
-          if (locContainers[i] && exp.location) {
-            const isRealMultiselect = !!locContainers[i].querySelector('[data-automation-id="multiselectInputContainer"]');
-            await tryFill('jobLocation', exp.location, isRealMultiselect);
-          }
+          await sleep(300);
 
-          const startC = groupFieldsBySectionIndex('startDate')[i];
-          if (startC && isVisible(startC.querySelector('input'))) {
-            scrollToCenter(startC);
-            await fillWorkdayDate(startC, exp.startMonth, exp.startYear);
-          }
-          const endC = groupFieldsBySectionIndex('endDate')[i];
-          if (endC && isVisible(endC.querySelector('input'))) {
-            scrollToCenter(endC);
-            await fillWorkdayDate(endC, exp.endMonth, exp.endYear);
-          }
+          // Re-query to detect if React replaced the DOM node after our fill
+          const freshTitleContainers = groupFieldsBySectionIndex('jobTitle');
+          const freshInput = freshTitleContainers[i]?.querySelector('input');
+          console.log('[huntkit] AFTER fill - jobTitle', i, 'value:', freshInput?.value);
+          console.log('[huntkit] same element?', titleInput === freshInput);
 
-          if (exp.description) {
-            await fillWorkdayDescription(exp, i);
-            await sleep(300);
-          }
-
+          // Wait for validation to settle then check for error indicators
           await sleep(500);
+          const reFreshContainers = groupFieldsBySectionIndex('jobTitle');
+          const errorEl = reFreshContainers[i]?.querySelector(
+            '[class*="error"], [role="alert"], [data-automation-id*="error"]'
+          );
+          console.log('[huntkit] jobTitle', i, 'error present:', errorEl?.textContent || 'NONE');
+
+          // Also snapshot all jobTitle values across ALL sections to detect cross-section resets
+          const allTitleInputs = groupFieldsBySectionIndex('jobTitle').map(c => c.querySelector('input')?.value);
+          console.log('[huntkit] ALL jobTitle values after fill', i, ':', allTitleInputs);
         }
+
+        await tryFill('companyName', exp.company);
+
+        const locContainers = groupFieldsBySectionIndex('jobLocation');
+        if (locContainers[i] && exp.location) {
+          const isRealMultiselect = !!locContainers[i].querySelector('[data-automation-id="multiselectInputContainer"]');
+          await tryFill('jobLocation', exp.location, isRealMultiselect);
+        }
+
+        const startC = groupFieldsBySectionIndex('startDate')[i];
+        if (startC && isVisible(startC.querySelector('input'))) {
+          scrollToCenter(startC);
+          await fillWorkdayDate(startC, exp.startMonth, exp.startYear);
+          console.log('[huntkit] section', i, 'field startDate filled');
+        }
+        const endC = groupFieldsBySectionIndex('endDate')[i];
+        if (endC && isVisible(endC.querySelector('input'))) {
+          scrollToCenter(endC);
+          await fillWorkdayDate(endC, exp.endMonth, exp.endYear);
+          console.log('[huntkit] section', i, 'field endDate filled');
+        }
+
+        if (exp.description) {
+          const allJobTitleCs = groupFieldsBySectionIndex('jobTitle');
+          const allRoleDescCs = groupFieldsBySectionIndex('roleDescription');
+          const allJobDescCs  = groupFieldsBySectionIndex('jobDescription');
+          console.log('[huntkit] EXP', i, 'jobTitle containers:', allJobTitleCs.length);
+          console.log('[huntkit] EXP', i, 'roleDescription containers:', allRoleDescCs.length, '| jobDescription:', allJobDescCs.length);
+          console.log('[huntkit] EXP', i, 'counts equal (title vs roleDesc)?', allJobTitleCs.length === allRoleDescCs.length);
+          await fillWorkdayDescription(exp, i);
+          console.log('[huntkit] EXP', i, 'description fill done');
+          await sleep(300);
+        }
+
+        await sleep(500);
       }
 
       await fillWorkdaySkills(profile);
     }
 
-    // ── Education (education step only) ───────────────────────────────────────
-    if (isEduStep) {
-      const eduList = profile.education?.filter(e => e?.institution) || [];
-      if (eduList.length > 0) {
-        await ensureWorkdaySections('schoolName', eduList.length);
+    // ── Education (runs on its own step OR alongside experience on "My Experience" page) ─
+    // Confirmed: Workday shows Education Add button on the same "My Experience" page
+    // as Work Experience, so isExpStep must also trigger the education loop.
+    console.log('[huntkit] checking EDU loop — step:', step, '| isExpStep:', isExpStep, '| isEduStep:', isEduStep);
+    if (isEduStep || isExpStep) {
+      console.log('[huntkit] EDU LOOP start, profile.education:', JSON.stringify(profile.education));
+      const isRealMultiselect = (c) => !!c?.querySelector('[data-automation-id="multiselectInputContainer"]');
+
+      for (let i = 0; i < (profile.education?.length || 0); i++) {
+        const edu = profile.education[i];
+        console.log('[huntkit] EDU', i, 'data:', edu);
+        if (!edu?.institution) {
+          console.log('[huntkit] EDU', i, 'skipped - no institution');
+          continue;
+        }
+
+        console.log('[huntkit] EDU', i, 'ensuring section exists');
+        await ensureWorkdaySections('schoolName', i + 1);
+
         const schoolContainers = groupFieldsBySectionIndex('schoolName');
-        console.log('[huntkit] edu sections after ensure:', schoolContainers.length, '/ need:', eduList.length);
-
-        const isRealMultiselect = (c) => !!c?.querySelector('[data-automation-id="multiselectInputContainer"]');
-
-        const tryFill = async (fieldName, value, isMultiselect = false) => {
-          const containers = groupFieldsBySectionIndex(fieldName);
-          const c = containers[i];
-          if (!c || !value) return false;
-          const input = c.querySelector('input, select, textarea');
-          if (!isVisible(input)) { console.log('[huntkit]', fieldName, i, 'not visible'); return false; }
-          scrollToCenter(c);
-          const result = await fillWithRetry(c, value, isMultiselect);
-          console.log('[huntkit]', fieldName, i, '→', result, String(value).slice(0, 40));
-          if (!verifyFilled(c, value)) {
-            console.log('[huntkit] fill unverified for', c.getAttribute('data-automation-id'));
-          }
-          await sleep(200);
-          return result;
-        };
-
-        for (var i = 0; i < Math.min(schoolContainers.length, eduList.length); i++) {
-          const edu = eduList[i];
-          console.log('[huntkit] filling edu', i, edu.institution);
-
-          await tryFill('schoolName', edu.institution, isRealMultiselect(schoolContainers[i]));
-
-          const degreeC = groupFieldsBySectionIndex('degree');
-          await tryFill('degree', edu.degree, isRealMultiselect(degreeC[i]));
-
-          const fosC = groupFieldsBySectionIndex('fieldOfStudy');
-          await tryFill('fieldOfStudy', edu.field, isRealMultiselect(fosC[i]));
-
-          await tryFill('gradeAverage', edu.gpa ? String(edu.gpa) : null, false);
-
-          const startC = groupFieldsBySectionIndex('firstYearAttended')[i];
-          if (startC && isVisible(startC.querySelector('input'))) {
-            scrollToCenter(startC);
-            await fillWorkdayDate(startC, edu.startMonth, edu.startYear);
-          }
-          const endC = groupFieldsBySectionIndex('lastYearAttended')[i];
-          if (endC && isVisible(endC.querySelector('input'))) {
-            scrollToCenter(endC);
-            await fillWorkdayDate(endC, edu.endMonth, edu.endYear);
-          }
-
-          await sleep(500);
+        console.log('[huntkit] EDU', i, 'schoolContainers.length:', schoolContainers.length);
+        if (!schoolContainers[i]) {
+          console.warn('[huntkit] EDU', i, 'container still missing after ensure');
+          continue;
         }
+
+        console.log('[huntkit] EDU', i, 'ready, filling fields for:', edu.institution);
+
+        const r0 = await fillWorkdayField(schoolContainers[i], edu.institution, isRealMultiselect(schoolContainers[i]));
+        console.log('[huntkit] EDU', i, 'field schoolName filled:', r0);
+        await sleep(300);
+
+        const degreeContainers = groupFieldsBySectionIndex('degree');
+        console.log('[huntkit] degree container HTML:', degreeContainers[0]?.outerHTML?.slice(0, 500));
+        if (degreeContainers[i]) {
+          const r1 = await fillWorkdayField(degreeContainers[i], edu.degree, isRealMultiselect(degreeContainers[i]));
+          console.log('[huntkit] EDU', i, 'field degree filled:', r1);
+          await sleep(300);
+        }
+
+        const fosContainers = groupFieldsBySectionIndex('fieldOfStudy');
+        if (fosContainers[i]) {
+          const r2 = await fillWorkdayField(fosContainers[i], edu.field, isRealMultiselect(fosContainers[i]));
+          console.log('[huntkit] EDU', i, 'field fieldOfStudy filled:', r2);
+          await sleep(300);
+        }
+
+        const gpaContainers = groupFieldsBySectionIndex('gradeAverage');
+        if (gpaContainers[i] && edu.gpa) {
+          const r3 = await fillWorkdayField(gpaContainers[i], String(edu.gpa), false);
+          console.log('[huntkit] EDU', i, 'field gradeAverage filled:', r3);
+          await sleep(200);
+        }
+
+        const startContainers = groupFieldsBySectionIndex('firstYearAttended');
+        if (startContainers[i]) {
+          await fillWorkdayDate(startContainers[i], edu.startMonth, edu.startYear);
+          console.log('[huntkit] EDU', i, 'field firstYearAttended filled');
+          await sleep(200);
+        }
+
+        const endContainers = groupFieldsBySectionIndex('lastYearAttended');
+        if (endContainers[i]) {
+          await fillWorkdayDate(endContainers[i], edu.endMonth, edu.endYear);
+          console.log('[huntkit] EDU', i, 'field lastYearAttended filled');
+          await sleep(200);
+        }
+
+        await sleep(500);
       }
 
-      await fillWorkdaySkills(profile);
+      // Skills already called at end of isExpStep block when on the experience page
+      if (!isExpStep) {
+        await fillWorkdaySkills(profile);
+      }
     }
+
+    await finalValidationSweep();
+
+    // Force any pending blur validation to fire for the last-filled field
+    document.body.click();
+    await sleep(300);
 
   } catch (e) {
     console.error('[huntkit] autofill error:', e);
@@ -673,7 +903,7 @@ export async function autofillPage(profile) {
     const hint = getFieldHint(el);
     const value = matchProfile(hint, profile, curEduIdx, curExpIdx);
     if (!value || alreadyFilled.has(el)) continue;
-    const ok = el.tagName === 'SELECT' ? fillSelect(el, value) : fillField(el, value);
+    const ok = el.tagName === 'SELECT' ? fillSelect(el, value) : await fillField(el, value);
     if (ok) { alreadyFilled.add(el); filled++; }
   }
 

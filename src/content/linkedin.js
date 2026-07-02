@@ -1,5 +1,5 @@
 import { extractLinkedInJD } from '../utils/jd-extractor.js';
-import { injectHuntKitButton, injectSidebarTrigger, showNewJobToast } from './generic.js';
+import { injectHuntKitButton, injectSidebarTrigger } from './generic.js';
 
 window.__huntkit_linkedin = true;
 
@@ -60,7 +60,7 @@ if (!window.__huntkit_linkedin_init) {
     }
   }
 
-  function handleNewJobDetected(jobId, isInitialLoad) {
+  function handleNewJobDetected(jobId) {
     chrome.storage.local.set({ currentJobId: jobId });
 
     chrome.storage.local.get(['sidebarWasOpen', 'resumes', 'resumeText'], (data) => {
@@ -71,9 +71,6 @@ if (!window.__huntkit_linkedin_init) {
         const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
       } else if (data.sidebarWasOpen) {
         const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
-      } else if (!isInitialLoad) {
-        // Navigation to a new job with sidebar closed → toast
-        showNewJobToast();
       }
     });
   }

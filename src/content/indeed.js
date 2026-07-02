@@ -1,5 +1,5 @@
 import { extractIndeedJD } from '../utils/jd-extractor.js';
-import { injectHuntKitButton, injectSidebarTrigger, showNewJobToast } from './generic.js';
+import { injectHuntKitButton, injectSidebarTrigger } from './generic.js';
 
 let lastUrl = location.href;
 // Indeed split-view uses ?vjk=JOBID on the /jobs listing page
@@ -11,7 +11,7 @@ function getVjk() {
   return new URLSearchParams(location.search).get('vjk') || null;
 }
 
-function handleNewJobDetected(isInitialLoad) {
+function handleNewJobDetected() {
   chrome.storage.local.get(['sidebarWasOpen', 'resumes', 'resumeText'], (data) => {
     const hasResume = (data.resumes?.length > 0) || !!data.resumeText;
 
@@ -19,8 +19,6 @@ function handleNewJobDetected(isInitialLoad) {
       const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
     } else if (data.sidebarWasOpen) {
       const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
-    } else if (!isInitialLoad) {
-      showNewJobToast();
     }
   });
 }
@@ -55,11 +53,11 @@ function isJobDetailPage() {
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    handleNewJobDetected(true);
+    handleNewJobDetected();
     init(0);
   });
 } else {
-  handleNewJobDetected(true);
+  handleNewJobDetected();
   init(0);
 }
 
@@ -72,7 +70,7 @@ setInterval(() => {
   if (newVjk && newVjk !== lastVjk) {
     lastVjk = newVjk;
     chrome.storage.local.set({ currentJobUrl: location.href });
-    handleNewJobDetected(false);
+    handleNewJobDetected();
     setTimeout(() => init(0), 1200);
   }
 }, 600);
@@ -85,7 +83,7 @@ const observer = new MutationObserver(() => {
     lastVjk = getVjk();
     if (isJobDetailPage()) {
       chrome.storage.local.set({ currentJobUrl: location.href });
-      handleNewJobDetected(false);
+      handleNewJobDetected();
       setTimeout(() => init(0), 800);
     }
   }

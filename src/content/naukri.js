@@ -1,23 +1,9 @@
 import { extractNaukriJD } from '../utils/jd-extractor.js';
-import { injectHuntKitButton, injectSidebarTrigger, showNewJobToast } from './generic.js';
+import { injectHuntKitButton, injectSidebarTrigger } from './generic.js';
 
 let lastUrl = location.href;
 
 injectSidebarTrigger();
-
-function handleNewJobDetected(isInitialLoad) {
-  chrome.storage.local.get(['sidebarWasOpen', 'resumes', 'resumeText'], (data) => {
-    const hasResume = (data.resumes?.length > 0) || !!data.resumeText;
-
-    if (!hasResume) {
-      const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
-    } else if (data.sidebarWasOpen) {
-      const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
-    } else if (!isInitialLoad) {
-      showNewJobToast();
-    }
-  });
-}
 
 function init() {
   if (!isJobDetailPage()) return;
@@ -57,12 +43,8 @@ function isJobDetailPage() {
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    handleNewJobDetected(true);
-    init();
-  });
+  document.addEventListener('DOMContentLoaded', init);
 } else {
-  handleNewJobDetected(true);
   init();
 }
 
@@ -72,7 +54,6 @@ window.addEventListener('popstate', () => setTimeout(init, 500));
 const observer = new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    handleNewJobDetected(false);
     setTimeout(init, 500);
   }
 });

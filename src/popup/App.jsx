@@ -336,10 +336,18 @@ function ResumeCard({ resume, onDelete, onSetDefault }) {
 
 function ProfilePanel() {
   const [profile, setProfile] = useState(null);
+  const [apiKey, setApiKey] = useState('');
   const [autofillStatus, setAutofillStatus] = useState('');
+  const [aiLoading, setAILoading] = useState(false);
+  const [fillManuallyError, setFillManuallyError] = useState(null);
 
   useEffect(() => {
     loadProfile();
+    chrome.storage.local.get(['anthropicApiKey', 'geminiApiKey', 'qwenApiKey', 'openaiApiKey', 'aiProvider'], (data) => {
+      const key = data.anthropicApiKey || data.geminiApiKey || data.qwenApiKey || data.openaiApiKey || '';
+      const provider = data.aiProvider || 'none';
+      setApiKey(provider !== 'none' && key ? key : '');
+    });
     const listener = (changes) => { if (changes.userProfile) loadProfile(); };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -399,6 +407,59 @@ function ProfilePanel() {
     }
   }
 
+  async function injectAndSend(tabId, message, onResponse) {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (!chrome.runtime.lastError) { onResponse(response); return; }
+      chrome.scripting.executeScript({ target: { tabId }, files: ['src/content/generic.js'] })
+        .then(() => setTimeout(() => {
+          chrome.tabs.sendMessage(tabId, message, (res) => {
+            if (chrome.runtime.lastError) { onResponse(null); return; }
+            onResponse(res);
+          });
+        }, 600))
+        .catch(() => onResponse(null));
+    });
+  }
+
+  async function handleAIAutofill() {
+    setAutofillStatus('');
+    setAILoading(true);
+    try {
+      const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
+      const tab = tabs[0];
+      injectAndSend(tab.id, { type: 'AI_AUTOFILL' }, (response) => {
+        setAILoading(false);
+        if (!response) { setAutofillStatus('Cannot autofill this page'); return; }
+        const filled = (response.results || []).filter(r => r.status === 'filled').length;
+        const guessed = (response.results || []).filter(r => r.confidence === 'guessed').length;
+        setAutofillStatus(`AI filled ${filled} fields · ${guessed} need review`);
+      });
+    } catch (err) {
+      setAILoading(false);
+      setAutofillStatus('Error: ' + err.message);
+    }
+  }
+
+  async function handleFillManually() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab.url || '';
+    if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('about:') || url.startsWith('edge://')) {
+      setFillManuallyError('Cannot open on browser system pages. Navigate to any webpage first.');
+      setTimeout(() => setFillManuallyError(null), 4000);
+      return;
+    }
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['src/content/generic.js'] });
+    } catch (_) { /* already injected or minor error — continue */ }
+    await new Promise(r => setTimeout(r, 300));
+    chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SIDEBAR_MANUAL_TAB' }, () => {
+      if (chrome.runtime.lastError) {
+        setFillManuallyError('Could not open sidebar. Try refreshing the page.');
+        setTimeout(() => setFillManuallyError(null), 4000);
+      }
+    });
+  }
+
   const hasProfile = profile && (profile.firstName || profile.email);
 
   return (
@@ -427,6 +488,7 @@ function ProfilePanel() {
         <span>📝</span> Open Profile Form
       </button>
 
+      {/* Button 1 — Rule-based autofill */}
       <button onClick={handleAutofill} style={{
         padding: '10px 16px', background: '#18181b', color: '#a78bfa',
         border: '1px solid #4338ca', borderRadius: 8, cursor: 'pointer',
@@ -436,10 +498,49 @@ function ProfilePanel() {
         🤖 Autofill Current Page
       </button>
 
+      {/* Button 2 — AI autofill (only if API key configured) */}
+      {apiKey && (
+        <button
+          onClick={handleAIAutofill}
+          disabled={aiLoading}
+          style={{
+            padding: '10px 16px', background: aiLoading ? '#27272a' : '#1e1b4b', color: aiLoading ? '#71717a' : '#c4b5fd',
+            border: '1px solid #4338ca', borderRadius: 8, cursor: aiLoading ? 'default' : 'pointer',
+            fontWeight: 600, fontSize: 13,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          }}
+        >
+          {aiLoading ? '⏳ AI Filling…' : '✨ AI Autofill'}
+        </button>
+      )}
+
+      {/* No API key hint */}
+      {!apiKey && (
+        <p style={{ fontSize: 11, color: '#52525b', textAlign: 'center', margin: '0 0 2px' }}>
+          Add API key in Settings for AI-powered autofill
+        </p>
+      )}
+
+      {/* Button 3 — Manual fill (always shown) */}
+      <button onClick={handleFillManually} style={{
+        padding: '10px 16px', background: '#18181b', color: '#71717a',
+        border: '1px solid #3f3f46', borderRadius: 8, cursor: 'pointer',
+        fontWeight: 600, fontSize: 13,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+      }}>
+        📋 Fill Manually
+      </button>
+
+      {fillManuallyError && (
+        <p style={{ fontSize: 12, textAlign: 'center', padding: '2px 0', color: '#fbbf24' }}>
+          {fillManuallyError}
+        </p>
+      )}
+
       {autofillStatus && (
         <p style={{
           fontSize: 12, textAlign: 'center', padding: '2px 0',
-          color: autofillStatus.startsWith('✓') ? '#86efac' : '#fbbf24',
+          color: autofillStatus.startsWith('✓') || autofillStatus.startsWith('AI') ? '#86efac' : '#fbbf24',
         }}>
           {autofillStatus}
         </p>

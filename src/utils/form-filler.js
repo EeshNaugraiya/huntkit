@@ -620,21 +620,24 @@ async function finalValidationSweep() {
 
     console.log('[huntkit] re-fixing invalid field:', field.id, 'value:', value);
 
-    for (const key in field) {
-      if (key.startsWith('__reactProps')) {
-        const props = field[key];
-        props.onChange?.({
-          target: field, currentTarget: field, type: 'change',
-          bubbles: true, preventDefault: () => {}, stopPropagation: () => {},
-        });
-        await sleep(100);
-        props.onBlur?.({
-          target: field, currentTarget: field, type: 'blur',
-          relatedTarget: null, bubbles: true,
-          preventDefault: () => {}, stopPropagation: () => {},
-        });
-      }
-    }
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value'
+    ).set;
+
+    setter.call(field, field.value + ' ');
+
+    field.dispatchEvent(new KeyboardEvent('keydown', {
+      key: ' ', code: 'Space', keyCode: 32, which: 32,
+      bubbles: true, cancelable: true,
+    }));
+    field.dispatchEvent(new InputEvent('input', {
+      bubbles: true, inputType: 'insertText', data: ' ',
+    }));
+    field.dispatchEvent(new KeyboardEvent('keyup', {
+      key: ' ', code: 'Space', keyCode: 32, which: 32,
+      bubbles: true, cancelable: true,
+    }));
+
     await sleep(300);
   }
 

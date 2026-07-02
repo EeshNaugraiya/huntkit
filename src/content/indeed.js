@@ -16,9 +16,9 @@ function handleNewJobDetected(isInitialLoad) {
     const hasResume = (data.resumes?.length > 0) || !!data.resumeText;
 
     if (!hasResume) {
-      const s = document.getElementById('huntkit-root'); if (s) s.style.display = 'flex';
+      const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
     } else if (data.sidebarWasOpen) {
-      const s = document.getElementById('huntkit-root'); if (s) s.style.display = 'flex';
+      const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
     } else if (!isInitialLoad) {
       showNewJobToast();
     }

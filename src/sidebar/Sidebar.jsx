@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import JobTracker from './JobTracker.jsx';
+import ConfidencePanel from './ConfidencePanel.jsx';
 import { getJobs } from '../storage/tracker.js';
 
-const TABS = ['Analysis', 'Jobs', 'Cover', 'Stats', 'Interview'];
+const TABS = ['Analysis', 'Jobs', 'Cover', 'Stats', 'Interview', 'Fill', 'Manual'];
 
 export default function Sidebar() {
   const [tab, setTab] = useState('Analysis');
   const [analysis, setAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [hasResume, setHasResume] = useState(null);
+  const [aiResults, setAIResults] = useState(null);
+  const [pageUrl, setPageUrl] = useState('');
 
   useEffect(() => {
     // Mark sidebar as open; clear on close so content scripts know the state
@@ -39,14 +42,30 @@ export default function Sidebar() {
       }
     };
     chrome.storage.onChanged.addListener(listener);
+
+    // postMessage from parent content script
+    const onMessage = (e) => {
+      if (e.data?.type === 'HUNTKIT_AI_RESULTS') {
+        setAIResults(e.data.results);
+        setTab('Fill');
+      }
+      if (e.data?.type === 'HUNTKIT_SWITCH_TAB') {
+        const name = e.data.tab.charAt(0).toUpperCase() + e.data.tab.slice(1);
+        setTab(name);
+        if (e.data.pageUrl) setPageUrl(e.data.pageUrl);
+      }
+    };
+    window.addEventListener('message', onMessage);
+
     return () => {
       chrome.storage.onChanged.removeListener(listener);
       window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('message', onMessage);
     };
   }, []);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', minHeight: '100vh', overflow: 'hidden', background: '#09090b', color: '#f4f4f5' }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid #27272a', display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 18 }}>🎯</span>
         <span style={{ fontWeight: 700, fontSize: 16, color: '#a78bfa', flex: 1 }}>HuntKit</span>
@@ -126,6 +145,8 @@ export default function Sidebar() {
         {tab === 'Cover' && <CoverLetterPanel analysis={analysis} />}
         {tab === 'Stats' && <StatsPanel />}
         {tab === 'Interview' && <InterviewPrepPanel analysis={analysis} />}
+        {tab === 'Fill' && <ConfidencePanel results={aiResults} />}
+        {tab === 'Manual' && <ManualPanel pageUrl={pageUrl} />}
       </div>
     </div>
   );
@@ -317,6 +338,17 @@ function BulletRewriter({ jdText }) {
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    function onMessage(e) {
+      if (e.data?.type === 'HUNTKIT_COPY_SUCCESS') {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   function handleRewrite() {
     if (!bullets.trim() || !jdText) return;
     setRewriting(true);
@@ -341,9 +373,7 @@ function BulletRewriter({ jdText }) {
 
   function copyAll() {
     if (!result) return;
-    navigator.clipboard.writeText(result.map((b) => b.rewritten).join('\n'));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    window.parent.postMessage({ type: 'HUNTKIT_COPY', value: result.map((b) => b.rewritten).join('\n') }, '*');
   }
 
   return (
@@ -727,6 +757,19 @@ function ScoreBar({ score }) {
 // ─── Cover Letter Panel ───────────────────────────────────────────────────────
 
 function CoverLetterPanel({ analysis }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    function onMessage(e) {
+      if (e.data?.type === 'HUNTKIT_COPY_SUCCESS') {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   if (!analysis?.coverLetter) {
     return (
       <div style={{ color: '#71717a', fontSize: 13, paddingTop: 24, textAlign: 'center' }}>
@@ -738,10 +781,10 @@ function CoverLetterPanel({ analysis }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <button
-        onClick={() => navigator.clipboard.writeText(analysis.coverLetter)}
+        onClick={() => window.parent.postMessage({ type: 'HUNTKIT_COPY', value: analysis.coverLetter }, '*')}
         style={copyBtnStyle}
       >
-        Copy to Clipboard
+        {copied ? 'Copied!' : 'Copy to Clipboard'}
       </button>
       <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.7, color: '#d4d4d8', background: '#18181b', padding: 14, borderRadius: 8 }}>
         {analysis.coverLetter}
@@ -1103,6 +1146,219 @@ function RoadmapTopic({ topic }) {
       <div style={{ fontSize: 11, color: '#71717a', paddingLeft: 24 }}>
         {topic.resources || 'Search online'}
       </div>
+    </div>
+  );
+}
+
+// ─── Manual Panel ─────────────────────────────────────────────────────────────
+
+function CopyRow({ label, value }) {
+  const [copied, setCopied] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const rowId = useRef(Math.random().toString(36).slice(2));
+
+  useEffect(() => {
+    function onMessage(e) {
+      if (e.data?.type === 'HUNTKIT_COPY_SUCCESS' && e.data.rowId === rowId.current) {
+        setCopied(true);
+        setFlash(true);
+        setTimeout(() => setCopied(false), 1000);
+        setTimeout(() => setFlash(false), 300);
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  if (!value && value !== 0) return null;
+  const display = String(value);
+
+  function copy() {
+    window.parent.postMessage({ type: 'HUNTKIT_COPY', value: display, rowId: rowId.current }, '*');
+  }
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '5px 8px',
+      borderRadius: 5,
+      background: flash ? '#22c55e20' : 'transparent',
+      transition: 'background 0.15s',
+    }}>
+      <span style={{ fontSize: 11, color: '#71717a', minWidth: 110, flexShrink: 0, fontWeight: 500 }}>{label}</span>
+      <span style={{ flex: 1, fontSize: 12, color: '#d4d4d8', wordBreak: 'break-all', lineHeight: 1.4 }}>{display}</span>
+      <button
+        onClick={copy}
+        title="Copy"
+        style={{
+          background: 'none',
+          border: '1px solid #3f3f46',
+          borderRadius: 4,
+          color: copied ? '#22c55e' : '#71717a',
+          cursor: 'pointer',
+          fontSize: 12,
+          padding: '1px 5px',
+          flexShrink: 0,
+          lineHeight: 1.4,
+        }}
+      >{copied ? '✓' : '📋'}</button>
+    </div>
+  );
+}
+
+function ManualSection({ title, children }) {
+  const hasContent = Array.isArray(children)
+    ? children.some(Boolean)
+    : Boolean(children);
+  if (!hasContent) return null;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#71717a', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6, paddingBottom: 4, borderBottom: '1px solid #27272a' }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ManualPanel({ pageUrl }) {
+  const [profile, setProfile] = useState(null);
+
+  useEffect(() => {
+    chrome.storage.local.get('userProfile', ({ userProfile }) => {
+      if (userProfile) setProfile(userProfile);
+    });
+    const listener = (changes) => {
+      if (changes.userProfile?.newValue) setProfile(changes.userProfile.newValue);
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, []);
+
+  function openProfile() {
+    chrome.runtime.sendMessage({ type: 'OPEN_PROFILE_TAB' });
+  }
+
+  if (!profile || (!profile.firstName && !profile.email)) {
+    return (
+      <div style={{ color: '#71717a', fontSize: 13, paddingTop: 24, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+        <div style={{ fontSize: 36 }}>📋</div>
+        <p style={{ color: '#d4d4d8', fontWeight: 500, margin: 0 }}>No profile saved</p>
+        <p style={{ fontSize: 12, lineHeight: 1.6, margin: 0 }}>Open Profile Form to add your info.</p>
+        <button
+          onClick={openProfile}
+          style={{ padding: '8px 16px', background: '#6366f1', color: 'white', border: 'none', borderRadius: 7, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
+        >
+          Open Profile Form
+        </button>
+      </div>
+    );
+  }
+
+  const isWorkday = /workday|myworkdayjobs/i.test(pageUrl);
+  const allExp = [
+    ...(profile.currentJob?.isEmployed ? [{
+      company: profile.currentJob.company,
+      title: profile.currentJob.title,
+      location: profile.currentJob.location,
+      startMonth: profile.currentJob.startMonth,
+      startYear: profile.currentJob.startYear,
+      description: profile.currentJob.description,
+      _current: true,
+    }] : []),
+    ...(profile.experience || []),
+  ];
+
+  const contactSection = (
+    <ManualSection title="Contact">
+      <CopyRow label="First Name" value={profile.firstName} />
+      <CopyRow label="Last Name" value={profile.lastName} />
+      <CopyRow label="Email" value={profile.email} />
+      <CopyRow label="Phone" value={profile.phone} />
+      <CopyRow label="City" value={profile.city} />
+      <CopyRow label="State" value={profile.state} />
+      <CopyRow label="Country" value={profile.country} />
+      <CopyRow label="LinkedIn" value={profile.linkedin} />
+      <CopyRow label="GitHub" value={profile.github} />
+      <CopyRow label="Portfolio" value={profile.portfolio} />
+    </ManualSection>
+  );
+
+  const authSection = (
+    <ManualSection title="Work Authorization">
+      <CopyRow label="Work Authorized" value={profile.workAuthorized} />
+      <CopyRow label="Needs Sponsorship" value={profile.requiresSponsorship} />
+      <CopyRow label="Notice Period" value={profile.noticePeriod ? `${profile.noticePeriod} days` : null} />
+      <CopyRow label="Current CTC" value={profile.currentCTC} />
+      <CopyRow label="Expected CTC" value={profile.expectedCTC} />
+    </ManualSection>
+  );
+
+  const expSection = (
+    <ManualSection title="Work Experience">
+      {allExp.map((exp, i) => (
+        <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: i < allExp.length - 1 ? '1px solid #27272a' : 'none' }}>
+          <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 600, marginBottom: 4 }}>
+            {exp._current ? 'Current' : `#${i + 1}`} — {exp.company || '—'}
+          </div>
+          <CopyRow label="Company" value={exp.company} />
+          <CopyRow label="Title" value={exp.title} />
+          <CopyRow label="Location" value={exp.location} />
+          <CopyRow label="Start" value={[exp.startMonth, exp.startYear].filter(Boolean).join(' ')} />
+          <CopyRow label="End" value={exp._current ? 'Present' : [exp.endMonth, exp.endYear].filter(Boolean).join(' ')} />
+          <CopyRow label="Description" value={exp.description} />
+        </div>
+      ))}
+    </ManualSection>
+  );
+
+  const eduSection = (
+    <ManualSection title="Education">
+      {(profile.education || []).map((edu, i) => (
+        <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: i < profile.education.length - 1 ? '1px solid #27272a' : 'none' }}>
+          <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 600, marginBottom: 4 }}>
+            #{i + 1} — {edu.institution || '—'}
+          </div>
+          <CopyRow label="Institution" value={edu.institution} />
+          <CopyRow label="Degree" value={edu.degree} />
+          <CopyRow label="Field" value={edu.field} />
+          <CopyRow label="Years" value={[edu.startYear, edu.endYear].filter(Boolean).join(' – ')} />
+          <CopyRow label="GPA" value={edu.gpa} />
+        </div>
+      ))}
+    </ManualSection>
+  );
+
+  const skillsSection = (
+    <ManualSection title="Skills">
+      <CopyRow label="Skills" value={profile.skills} />
+      <CopyRow label="Languages" value={profile.languages} />
+      <CopyRow label="Tools" value={profile.tools} />
+    </ManualSection>
+  );
+
+  const sections = isWorkday
+    ? [expSection, eduSection, contactSection, authSection, skillsSection]
+    : [contactSection, authSection, expSection, eduSection, skillsSection];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: '#71717a' }}>
+          {isWorkday ? 'Workday order' : 'Standard order'}
+        </span>
+        <button
+          onClick={openProfile}
+          style={{ background: 'none', border: '1px solid #3f3f46', borderRadius: 5, color: '#a1a1aa', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}
+        >
+          Edit Profile
+        </button>
+      </div>
+      {sections}
     </div>
   );
 }

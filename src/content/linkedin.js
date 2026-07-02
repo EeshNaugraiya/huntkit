@@ -68,9 +68,9 @@ if (!window.__huntkit_linkedin_init) {
 
       if (!hasResume) {
         // First-time: auto-open so onboarding banner is shown
-        const s = document.getElementById('huntkit-root'); if (s) s.style.display = 'flex';
+        const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
       } else if (data.sidebarWasOpen) {
-        const s = document.getElementById('huntkit-root'); if (s) s.style.display = 'flex';
+        const s = document.getElementById('huntkit-root'); if (s) s.style.transform = 'translateX(0)';
       } else if (!isInitialLoad) {
         // Navigation to a new job with sidebar closed → toast
         showNewJobToast();

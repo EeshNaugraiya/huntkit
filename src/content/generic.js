@@ -1,4 +1,5 @@
 import { autofillPage } from '../utils/form-filler.js';
+import { aiAutofillPage } from '../utils/ai-form-filler.js';
 
 const BUTTON_ID = 'huntkit-analyze-btn';
 const TRIGGER_ID = 'huntkit-sidebar-trigger';
@@ -49,16 +50,22 @@ export function injectHuntKitButton({ container, jdData }) {
 function showSidebar() {
   const s = document.getElementById('huntkit-root');
   if (!s) return;
-  s.style.display = 'flex';
+  s.style.transform = 'translateX(0)';
   chrome.storage.local.set({ sidebarWasOpen: true });
+}
+
+function hideSidebar() {
+  const s = document.getElementById('huntkit-root');
+  if (!s) return;
+  s.style.transform = 'translateX(100%)';
+  chrome.storage.local.set({ sidebarWasOpen: false });
 }
 
 function toggleSidebar() {
   const s = document.getElementById('huntkit-root');
   if (!s) return;
-  const visible = s.style.display !== 'none';
-  s.style.display = visible ? 'none' : 'flex';
-  chrome.storage.local.set({ sidebarWasOpen: !visible });
+  const hidden = s.style.transform === 'translateX(100%)';
+  if (hidden) showSidebar(); else hideSidebar();
 }
 
 function injectSidebarIframe() {
@@ -66,6 +73,9 @@ function injectSidebarIframe() {
   const iframe = document.createElement('iframe');
   iframe.id = 'huntkit-root';
   iframe.src = chrome.runtime.getURL('src/sidebar/index.html');
+  // Use transform instead of display:none so the iframe always has a real
+  // layout viewport — display:none collapses the viewport to 0×0 and makes
+  // 100vh inside the iframe resolve to 0, causing a black screen on first open.
   iframe.style.cssText = `
     position: fixed;
     right: 0;
@@ -74,15 +84,13 @@ function injectSidebarIframe() {
     height: 100vh;
     border: none;
     z-index: 999999;
-    display: none;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
     box-shadow: -4px 0 20px rgba(0,0,0,0.3);
   `;
   document.body.appendChild(iframe);
   window.addEventListener('message', (e) => {
-    if (e.data?.type === 'HUNTKIT_CLOSE') {
-      iframe.style.display = 'none';
-      chrome.storage.local.set({ sidebarWasOpen: false });
-    }
+    if (e.data?.type === 'HUNTKIT_CLOSE') hideSidebar();
   });
 }
 
@@ -238,5 +246,88 @@ chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
     }).catch(() => sendResponse({ filled: 0 }));
     return true;
   }
+
+  if (msg.type === 'AI_AUTOFILL') {
+    aiAutofillPage().then(results => {
+      sendResponse({ results });
+      injectSidebarIframe();
+      showSidebar();
+      document.getElementById('huntkit-root')?.contentWindow?.postMessage(
+        { type: 'HUNTKIT_AI_RESULTS', results },
+        '*'
+      );
+    }).catch(err => {
+      sendResponse({ results: [], error: err.message });
+      showToast('AI Autofill error: ' + err.message, 'error');
+    });
+    return true;
+  }
+
+  if (msg.type === 'OPEN_SIDEBAR_FILL_TAB') {
+    injectSidebarIframe();
+    showSidebar();
+    document.getElementById('huntkit-root')?.contentWindow?.postMessage(
+      { type: 'HUNTKIT_SWITCH_TAB', tab: 'fill', pageUrl: location.href },
+      '*'
+    );
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === 'OPEN_SIDEBAR_MANUAL_TAB') {
+    injectSidebarIframe();
+    showSidebar();
+    document.getElementById('huntkit-root')?.contentWindow?.postMessage(
+      { type: 'HUNTKIT_SWITCH_TAB', tab: 'manual', pageUrl: location.href },
+      '*'
+    );
+    sendResponse({ ok: true });
+    return true;
+  }
+
   return true;
 });
+
+// Jump-to-field: sidebar sends this when user clicks ↗
+window.addEventListener('message', (e) => {
+  if (e.data?.type !== 'HUNTKIT_JUMP_TO') return;
+  const id = e.data.fieldId;
+  let el = document.getElementById(id)
+    || document.querySelector(`[data-automation-id="${id}"]`)
+    || document.querySelector(`[data-hk-id="${id}"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const input = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+    ? el
+    : el.querySelector('input, textarea, select');
+  input?.focus();
+});
+
+// Clipboard proxy: sidebar iframe can't call navigator.clipboard directly due to
+// Permissions-Policy on host pages like LinkedIn — parent page does it instead.
+window.addEventListener('message', (e) => {
+  if (e.data?.type !== 'HUNTKIT_COPY') return;
+  const value = e.data.value;
+  const iframe = document.getElementById('huntkit-root');
+
+  function notifySuccess() {
+    iframe?.contentWindow?.postMessage({ type: 'HUNTKIT_COPY_SUCCESS', rowId: e.data.rowId }, '*');
+  }
+
+  navigator.clipboard.writeText(value)
+    .then(notifySuccess)
+    .catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = value;
+      ta.style.cssText = 'position:fixed;top:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      notifySuccess();
+    });
+});
+
+// Ensure sidebar is available on application pages (Workday, Greenhouse, Lever)
+injectSidebarTrigger();

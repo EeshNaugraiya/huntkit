@@ -3,6 +3,16 @@ import { scoreAllPlatforms } from '../ai/ats-profiles.js';
 import { saveJob, findDuplicate } from '../storage/tracker.js';
 import { getAllResumes, addResume, deleteResume, setDefaultResume } from '../storage/resume.js';
 
+function setBadge(tabId, count) {
+  if (!tabId) return;
+  if (count === 0) {
+    chrome.action.setBadgeText({ text: '', tabId });
+  } else {
+    chrome.action.setBadgeText({ text: String(count), tabId });
+    chrome.action.setBadgeBackgroundColor({ color: '#ef4444', tabId });
+  }
+}
+
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') {
     seedDefaultSettings();
@@ -112,6 +122,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chrome.storage.local.get(['aiProvider', 'anthropicApiKey', 'qwenApiKey', 'geminiApiKey', 'openaiApiKey'])
       .then((settings) => sendResponse({ settings }))
       .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'SET_BADGE') {
+    const tabId = message.payload?.tabId || _sender?.tab?.id;
+    setBadge(tabId, message.payload?.count ?? 0);
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'OPEN_PROFILE_TAB') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/profile/index.html') });
+    sendResponse({ ok: true });
     return true;
   }
 
